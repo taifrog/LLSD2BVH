@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "llsd2bvh"
+version = "0.1.0"
+description = "Firestorm Poser LLSD XML to BVH converter"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+llsd2bvh = "llsd2bvh.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/llsd2bvh"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
