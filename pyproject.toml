@@ -8,10 +8,11 @@ version = "0.1.0"
 description = "Firestorm Poser LLSD XML to BVH converter"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = []
+dependencies = ["PySide6"]
 
 [project.scripts]
 llsd2bvh = "llsd2bvh.cli:main"
+llsd2bvh-gui = "llsd2bvh.gui:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llsd2bvh"]

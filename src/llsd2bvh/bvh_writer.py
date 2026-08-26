@@ -43,23 +43,49 @@ def write_bvh(
     include_face: bool = False,
     include_tail: bool = False,
 ) -> Path:
-    """BVH ファイルを書き出す。
+    """単一フレーム BVH を書き出す（write_bvh_frames のラッパ）。"""
+    return write_bvh_frames(
+        [joints_data],
+        bones,
+        out_path,
+        frame_time=frame_time,
+        units=units,
+        sl_compat=sl_compat,
+        include_face=include_face,
+        include_tail=include_tail,
+    )
 
-    joints_data: llsd_parser の出力 {joint: {rotation, position}}
-    bones: skeleton.load_skeleton の出力（フィルタ済み）
-    units/sl_compat が None の場合は mPelvis の位置有無で自動判定:
-      位置あり (>|1e-6|) → inch + Frames:2、位置なし → meter + Frames:1
-    明示指定時は指定値を優先。
+
+def write_bvh_frames(
+    frames_data: List[Dict[str, Dict]],
+    bones: Dict[str, Dict],
+    out_path: str | Path,
+    frame_time: float = 0.0333333,
+    units: str | None = None,
+    sl_compat: bool | None = None,
+    include_face: bool = False,
+    include_tail: bool = False,
+) -> Path:
+    """複数フレーム BVH を書き出す。
+
+    frames_data: llsd_parser 出力のリスト。各要素が1フレーム。
+    1フレームの連結で1 BVHを生成（GUIの全フレーム連結用）。
+    units/sl_compat が None の場合は全フレームの mPelvis 位置有無で自動判定。
     """
+    if not frames_data:
+        raise ValueError("frames_data is empty")
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 自動判定用に mPelvis 位置を取得（閾値 1e-6）
-    _pelvis_pos_raw = (0.0, 0.0, 0.0)
-    if "mPelvis" in joints_data:
-        _pelvis_pos_raw = joints_data["mPelvis"].get("position", (0.0, 0.0, 0.0))
-    _has_pos = any(abs(v) > 1e-6 for v in _pelvis_pos_raw)
-    # None の場合のみ自動
+    # 自動判定: いずれかのフレームで位置があれば inch+2f
+    _has_pos = False
+    for joints_data in frames_data:
+        pos = (0.0, 0.0, 0.0)
+        if "mPelvis" in joints_data:
+            pos = joints_data["mPelvis"].get("position", (0.0, 0.0, 0.0))
+        if any(abs(v) > 1e-6 for v in pos):
+            _has_pos = True
+            break
     if units is None:
         units = "inch" if _has_pos else "meter"
     if sl_compat is None:
@@ -103,43 +129,38 @@ def write_bvh(
     # 再現性を考慮し Pelvis pos は申告通りに file の [0],[1],[2] を [X,Y,Z] として扱わず、file そのままを BVH X,Y,Z にする
     # → ここでは file pos をそのまま Xpos,Ypos,Zpos に出力（単位変換のみ）。
 
-    # Joint ごとの BVH deg を計算（Headのみ逆巡回Fix）
-    bvh_rot: Dict[str, Tuple[float, float, float]] = {}
-    for name in order:
-        rot = (0.0, 0.0, 0.0)
-        if name in joints_data:
-            rot = joints_data[name].get("rotation", (0.0, 0.0, 0.0))
-        bvh_rot[name] = tuple(llsd_to_bvh_deg(name, rot, order="ZXY"))
-
-    # ROOT 位置 – Variant B (X=VY, Y=VZ, Z=VX) が Viewerで Up→Y, Left→X, Forward→Z と一致することを inch_2f で検証
-    # LLSD X=前, Y=左, Z=上 → BVH Xpos=左(Y), Ypos=上(Z), Zpos=前(X)
-    pelvis_pos = (0.0, 0.0, 0.0)
-    if "mPelvis" in joints_data:
-        pelvis_pos = joints_data["mPelvis"].get("position", (0.0, 0.0, 0.0))
-    # 位置SWAP: (Xpos, Ypos, Zpos) = (VY, VZ, VX)
-    pelvis_pos_swapped = (pelvis_pos[1], pelvis_pos[2], pelvis_pos[0])
-    pelvis_pos_scaled = tuple(v * scale for v in pelvis_pos_swapped)
-    # Pelvis 回転も BVH Z X Y で
-    pelvis_rot = bvh_rot.get(root_name, (0.0, 0.0, 0.0))
-
     # チャネル数: ROOT 6 + (n-1)*3
     num_channels = 6 + (len(order) - 1) * 3 if order else 0
 
-    # 1フレーム（または sl_compat で2フレーム）
+    # MOTION: フレームごと
     motion_lines: List[List[float]] = []
-    frame_values: List[float] = []
-    # ROOT: Xpos Ypos Zpos Zrot Xrot Yrot
-    frame_values.extend([pelvis_pos_scaled[0], pelvis_pos_scaled[1], pelvis_pos_scaled[2]])
-    frame_values.extend([pelvis_rot[0], pelvis_rot[1], pelvis_rot[2]])
-    for name in order:
-        if name == root_name:
-            continue
-        rot = bvh_rot.get(name, (0.0, 0.0, 0.0))
-        frame_values.extend([rot[0], rot[1], rot[2]])
-    motion_lines.append(frame_values)
+    for joints_data in frames_data:
+        bvh_rot: Dict[str, Tuple[float, float, float]] = {}
+        for name in order:
+            rot = (0.0, 0.0, 0.0)
+            if name in joints_data:
+                rot = joints_data[name].get("rotation", (0.0, 0.0, 0.0))
+            bvh_rot[name] = tuple(llsd_to_bvh_deg(name, rot, order="ZXY"))
+
+        # ROOT 位置 – Variant B (X=VY, Y=VZ, Z=VX)
+        pelvis_pos = (0.0, 0.0, 0.0)
+        if "mPelvis" in joints_data:
+            pelvis_pos = joints_data["mPelvis"].get("position", (0.0, 0.0, 0.0))
+        pelvis_pos_swapped = (pelvis_pos[1], pelvis_pos[2], pelvis_pos[0])
+        pelvis_pos_scaled = tuple(v * scale for v in pelvis_pos_swapped)
+        pelvis_rot = bvh_rot.get(root_name, (0.0, 0.0, 0.0))
+
+        frame_values: List[float] = []
+        frame_values.extend([pelvis_pos_scaled[0], pelvis_pos_scaled[1], pelvis_pos_scaled[2]])
+        frame_values.extend([pelvis_rot[0], pelvis_rot[1], pelvis_rot[2]])
+        for name in order:
+            if name == root_name:
+                continue
+            rot = bvh_rot.get(name, (0.0, 0.0, 0.0))
+            frame_values.extend([rot[0], rot[1], rot[2]])
+        motion_lines.append(frame_values)
+
     if sl_compat:
-        # 1フレーム目を基準フレーム（全0）として複製、2フレーム目が実ポーズ がSLの慣例
-        # Viewer は 1フレーム目の非ゼロ差分で joint 有効判定するため、基準フレームは 0 にする
         base = [0.0] * num_channels
         motion_lines.insert(0, base)
 
