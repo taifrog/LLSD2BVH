@@ -14,15 +14,17 @@ from llsd2bvh.gui import MainWindow
 def main():
     app = QApplication(sys.argv)
     win = MainWindow()
-    # サンプルを1-2件追加した状態
+    # サンプルを2-3件追加した状態（タイムライン表示）
     samples = [
         str(ROOT / "tests" / "samples" / "testChange03.xml"),
         str(ROOT / "tests" / "samples" / "testChange04.xml"),
+        str(ROOT / "tests" / "samples" / "testChange01.xml"),
     ]
     # 存在するものだけ
     samples = [s for s in samples if Path(s).exists()]
     if samples:
-        win.add_files(samples[:2])
+        win.add_files(samples[:3])
+        win.spin_duration.setValue(5.0)
         win.edit_output.setText(str(ROOT / "dist" / "LLSD2BVH" / "output.bvh"))
     win.show()
     # 描画を待ってからキャプチャ
