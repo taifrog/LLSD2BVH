@@ -149,14 +149,19 @@ class MainWindow(QMainWindow):
         self.combo_sl = QComboBox()
         self.combo_sl.addItems(["自動", "2フレーム", "1フレーム"])
         opt_row2.addWidget(self.combo_sl)
-        opt_row2.addWidget(QLabel("Frame Time:"))
+        self._label_frame = QLabel("Frame Time:")
+        self._label_frame.setVisible(False)
         self.spin_frame = QDoubleSpinBox()
         self.spin_frame.setDecimals(7)
         self.spin_frame.setSingleStep(0.001)
         self.spin_frame.setRange(0.001, 1.0)
         self.spin_frame.setValue(0.0333333)
+        self.spin_frame.setVisible(False)
+        self._label_frame_suffix = QLabel("(固定値 0.0333)")
+        self._label_frame_suffix.setVisible(False)
+        opt_row2.addWidget(self._label_frame)
         opt_row2.addWidget(self.spin_frame)
-        opt_row2.addWidget(QLabel("(1件時のみ手動、2件以上は自動算出)"))
+        opt_row2.addWidget(self._label_frame_suffix)
         opt_row2.addStretch()
         layout.addLayout(opt_row2)
 
@@ -214,15 +219,13 @@ class MainWindow(QMainWindow):
         has_timeline = count >= 2
         self.timeline_view.setEnabled(has_timeline)
         self.spin_duration.setEnabled(has_timeline)
-        # Frame Time: 1件のみ手動、2件以上は自動
-        self.spin_frame.setEnabled(not has_timeline)
+        # Frame Time は常時非表示（固定値 0.0333333 を使用）
+        self.spin_frame.setVisible(False)
+        self._label_frame.setVisible(False)
+        self._label_frame_suffix.setVisible(False)
         if has_timeline:
             self._sync_timeline()
-            self._update_computed_label()
-        else:
-            self.label_computed.setText("算出: -（1件のためタイムライン無効、Frame Timeを直接指定）")
-            if count == 1:
-                self.spin_frame.setEnabled(True)
+        self._update_computed_label()
 
     def _get_full_paths(self) -> list[Path]:
         paths: list[Path] = []
@@ -363,7 +366,12 @@ class MainWindow(QMainWindow):
 
     def _update_computed_label(self):
         count = self.list_widget.count()
-        if count < 2:
+        if count == 0:
+            self.label_computed.setText("算出: -")
+            return
+        if count == 1:
+            dt = 0.0333333
+            self.label_computed.setText(f"Frame Time: {dt:.4f}  総フレーム: 1（固定）")
             return
         try:
             items = self.timeline_view.get_items()
@@ -589,9 +597,9 @@ class MainWindow(QMainWindow):
                 self.progress.setVisible(False)
             return
         else:
-            # 1件: 従来通り Frame Time 手動
+            # 1件: Frame Time は固定 0.0333333（変更不可）
             inputs = all_inputs
-            frame_time = float(self.spin_frame.value())
+            frame_time = 0.0333333
             if out_text:
                 out_path = Path(out_text)
             else:
