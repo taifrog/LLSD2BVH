@@ -21,7 +21,7 @@ Firestorm / Aperture Viewer の Poser でエクスポートした LLSD XML ポ�
 
 ### ダウンロード・解凍・実行
 
-1. GitHub Releases から `LLSD2BVH_v0.1.0.zip` をダウンロード
+1. [GitHub Releases](https://github.com/taifrog/LLSD2BVH/releases) から `LLSD2BVH_v0.1.0.zip` をダウンロード
 2. 右クリック →「すべて展開」で解凍（`LLSD2BVH/` フォルダが生成されます）
 3. `LLSD2BVH/LLSD2BVH.exe` をダブルクリックで起動
 
