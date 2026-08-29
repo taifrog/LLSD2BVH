@@ -16,13 +16,13 @@ def test_filter_default():
     fb = filter_skeleton(bones)
     assert "mFaceJaw" not in fb
     assert "mTail1" not in fb
-    assert "mHandIndex1Left" in fb
-    assert len(fb) == 56
+    assert "mHandIndex1Left" not in fb  # デフォルトは手除外
+    assert len(fb) == 26
     order = get_bvh_order(fb)
     assert order[0] == "mPelvis"
     assert "mTorso" in order
     assert "mToeRight" in order
-    assert len(order) == len(set(order)) == 56
+    assert len(order) == len(set(order)) == 26
 
 def test_filter_include_face():
     bones = load_skeleton(SKELETON)

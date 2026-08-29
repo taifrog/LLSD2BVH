@@ -84,7 +84,7 @@ EXCLUDE_BY_DEFAULT = {
 }
 
 
-def filter_skeleton(bones: Dict[str, Dict], include_face: bool = False, include_tail: bool = False, include_hands: bool = True, include_collision: bool = False) -> Dict[str, Dict]:
+def filter_skeleton(bones: Dict[str, Dict], include_face: bool = False, include_tail: bool = False, include_hands: bool = False, include_collision: bool = False) -> Dict[str, Dict]:
     """不要なボーンを除外したコピーを返す。"""
     result: Dict[str, Dict] = {}
     for name, data in bones.items():

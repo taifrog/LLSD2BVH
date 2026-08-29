@@ -23,9 +23,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sl-compat", action="store_true", default=None, help="SL互換: 1フレーム目を基準フレームとして複製 (Frames:2) (default: 自動: 位置あり→2f, 位置なし→1f。明示時は上書き)")
     p.add_argument("--no-sl-compat", action="store_true", help="SL互換を無効化（自動判定を上書き）")
     p.add_argument("--frame-time", type=float, default=0.0333333, help="Frame Time (default: 0.0333333)")
-    p.add_argument("--include-face", action="store_true", help="顔ボーンを含める")
-    p.add_argument("--include-tail", action="store_true", help="Tailボーンを含める")
-    p.add_argument("--no-hands", action="store_true", help="手ボーンを除外")
+    p.add_argument("--include-hands", action="store_true", help="手ボーンを含める（デフォルトは除外）")
+    p.add_argument("--no-hands", action="store_true", help=argparse.SUPPRESS)
     return p
 
 
@@ -62,11 +61,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     bones = load_skeleton(skeleton_path)
+    # 顔・尻尾は常時除外、手はデフォルト除外（--include-hands で含む、旧 --no-hands は互換aliasで除外のまま）
+    include_hands = bool(getattr(args, "include_hands", False))
     bones = filter_skeleton(
         bones,
-        include_face=args.include_face,
-        include_tail=args.include_tail,
-        include_hands=not args.no_hands,
+        include_face=False,
+        include_tail=False,
+        include_hands=include_hands,
     )
 
     # 入力解決
@@ -132,8 +133,8 @@ def main(argv: list[str] | None = None) -> int:
                 frame_time=args.frame_time,
                 units=args.units,
                 sl_compat=eff_sl_compat,
-                include_face=args.include_face,
-                include_tail=args.include_tail,
+                include_face=False,
+                include_tail=False,
             )
             print(f"written: {out_path}")
         except Exception as e:

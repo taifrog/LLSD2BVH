@@ -161,11 +161,9 @@ class MainWindow(QMainWindow):
         layout.addLayout(opt_row2)
 
         opt_row3 = QHBoxLayout()
-        self.chk_face = QCheckBox("顔を含める")
-        self.chk_tail = QCheckBox("尻尾を含める")
         self.chk_no_hands = QCheckBox("手を除外")
-        for c in [self.chk_face, self.chk_tail, self.chk_no_hands]:
-            opt_row3.addWidget(c)
+        self.chk_no_hands.setChecked(True)
+        opt_row3.addWidget(self.chk_no_hands)
         opt_row3.addStretch()
         layout.addLayout(opt_row3)
 
@@ -532,8 +530,8 @@ class MainWindow(QMainWindow):
         units = units_map[self.combo_units.currentText()]
         sl_map = {"自動": None, "2フレーム": True, "1フレーム": False}
         sl_compat = sl_map[self.combo_sl.currentText()]
-        include_face = self.chk_face.isChecked()
-        include_tail = self.chk_tail.isChecked()
+        include_face = False
+        include_tail = False
         include_hands = not self.chk_no_hands.isChecked()
 
         # timeline分岐
