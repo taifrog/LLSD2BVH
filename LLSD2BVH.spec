@@ -4,11 +4,14 @@
 
 datas = [('avatar_skeleton.xml', '.')]
 binaries = []
-hiddenimports = ['PySide6.QtXml']
+hiddenimports = [
+    'PySide6.QtXml',
+    'llsd2bvh.llsd_parser', 'llsd2bvh.skeleton', 'llsd2bvh.bvh_writer', 'llsd2bvh.euler_math',
+]
 
 a = Analysis(
-    ['src/llsd2bvh/gui.py'],
-    pathex=[],
+    ['tools/entry_gui.py'],
+    pathex=['src'],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
