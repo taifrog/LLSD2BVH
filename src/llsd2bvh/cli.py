@@ -33,15 +33,26 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    # skeleton 解決
+    # skeleton 解決 (PyInstaller 対応: exe横 > 内蔵 > CWD)
     skeleton_path = args.skeleton
     if skeleton_path is None:
-        # デフォルト: パッケージ同梱 or リポジトリ直下
-        candidates = [
-            Path(__file__).parent.parent.parent / "avatar_skeleton.xml",
-            Path.cwd() / "avatar_skeleton.xml",
-            Path(r"C:\Program Files\SecondLifeViewer\character\avatar_skeleton.xml"),
-        ]
+        if getattr(sys, 'frozen', False):
+            exe_dir = Path(sys.executable).parent
+            meipass = Path(getattr(sys, '_MEIPASS', exe_dir))
+            candidates = [
+                exe_dir / "avatar_skeleton.xml",
+                exe_dir / "_internal" / "avatar_skeleton.xml",
+                meipass / "avatar_skeleton.xml",
+                meipass / "_internal" / "avatar_skeleton.xml",
+                Path.cwd() / "avatar_skeleton.xml",
+                Path(__file__).parent.parent.parent / "avatar_skeleton.xml",
+            ]
+        else:
+            candidates = [
+                Path(__file__).parent.parent.parent / "avatar_skeleton.xml",
+                Path.cwd() / "avatar_skeleton.xml",
+            ]
+        candidates.append(Path(r"C:\Program Files\SecondLifeViewer\character\avatar_skeleton.xml"))
         for c in candidates:
             if c.exists():
                 skeleton_path = str(c)

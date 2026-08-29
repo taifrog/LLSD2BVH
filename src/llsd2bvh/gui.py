@@ -262,23 +262,37 @@ class MainWindow(QMainWindow):
                 # for multi, put in first input's dir as concatenated.bvh if name collision?
                 out_path = inputs[0].parent / (inputs[0].stem + "_concatenated.bvh")
 
-        # skeleton
+        # skeleton (PyInstaller 対応: exe横 > 内蔵 > CWD)
         skel_path_text = self.edit_skeleton.text().strip()
         if skel_path_text:
             skel_path = Path(skel_path_text)
         else:
-            candidates = [
-                Path(__file__).parent.parent.parent / "avatar_skeleton.xml",
-                Path.cwd() / "avatar_skeleton.xml",
-                Path(r"C:\Program Files\SecondLifeViewer\character\avatar_skeleton.xml"),
-            ]
+            # exe 実行時は exe と同ディレクトリを優先（外部差し替え用）
+            if getattr(sys, 'frozen', False):
+                exe_dir = Path(sys.executable).parent
+                meipass = Path(getattr(sys, '_MEIPASS', exe_dir))
+                candidates = [
+                    exe_dir / "avatar_skeleton.xml",
+                    exe_dir / "_internal" / "avatar_skeleton.xml",
+                    meipass / "avatar_skeleton.xml",
+                    meipass / "_internal" / "avatar_skeleton.xml",
+                    Path.cwd() / "avatar_skeleton.xml",
+                    Path(__file__).parent.parent.parent / "avatar_skeleton.xml",
+                ]
+            else:
+                candidates = [
+                    Path(__file__).parent.parent.parent / "avatar_skeleton.xml",
+                    Path.cwd() / "avatar_skeleton.xml",
+                ]
+            # Viewer 既定パスは最後のフォールバック
+            candidates.append(Path(r"C:\Program Files\SecondLifeViewer\character\avatar_skeleton.xml"))
             skel_path = None
             for c in candidates:
                 if c.exists():
                     skel_path = c
                     break
             if skel_path is None:
-                QMessageBox.warning(self, "エラー", "avatar_skeleton.xml が見つかりません。--skeleton で指定してください。")
+                QMessageBox.warning(self, "エラー", "avatar_skeleton.xml が見つかりません。--skeleton で指定するか、exeと同じフォルダに配置してください。")
                 return
         # options
         units_map = {"自動": None, "meter": "meter", "inch": "inch"}
