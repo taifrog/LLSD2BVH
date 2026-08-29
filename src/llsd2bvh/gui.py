@@ -200,6 +200,11 @@ class MainWindow(QMainWindow):
         self.btn_close.clicked.connect(self.close)
         self.spin_duration.valueChanged.connect(self._on_duration_changed)
         self.timeline_view.timeChanged.connect(self._on_timeline_changed)
+        # リスト内部ドラッグ並替後も番号を振り直す
+        try:
+            self.list_widget.model().rowsMoved.connect(self._on_list_reordered)
+        except Exception:
+            pass
 
     # helpers
     def log_msg(self, msg: str):
@@ -220,6 +225,34 @@ class MainWindow(QMainWindow):
             self.label_computed.setText("算出: -（1件のためタイムライン無効、Frame Timeを直接指定）")
             if count == 1:
                 self.spin_frame.setEnabled(True)
+
+    def _get_full_paths(self) -> list[Path]:
+        paths: list[Path] = []
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            full = item.data(Qt.UserRole)
+            if full:
+                paths.append(Path(full))
+            else:
+                # fallback: parse "N. name" or raw path
+                txt = item.text()
+                if ". " in txt:
+                    # try to extract after ". "
+                    # but fallback may be inaccurate; use txt as is
+                    paths.append(Path(txt.split(". ", 1)[-1]))
+                else:
+                    paths.append(Path(txt))
+        return paths
+
+    def _refresh_list_numbers(self):
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            full = item.data(Qt.UserRole)
+            if not full:
+                continue
+            name = Path(full).name
+            item.setText(f"{i+1}. {name}")
+            item.setToolTip(str(full))
 
     def _on_duration_changed(self, _val):
         new_dur = float(self.spin_duration.value())
@@ -246,16 +279,30 @@ class MainWindow(QMainWindow):
     def _on_timeline_changed(self):
         self._update_computed_label()
 
+    def _on_list_reordered(self, *args):
+        self._refresh_list_numbers()
+        paths = self._get_full_paths()
+        self.timeline_view.set_number_map({str(p): i + 1 for i, p in enumerate(paths)})
+        self.timeline_view.update()
+
     def _sync_timeline(self):
         """list_widget の内容を timeline_view に同期"""
         count = self.list_widget.count()
         if count < 2:
             if count == 0:
                 self.timeline_view.set_items([])
+                self.timeline_view.set_number_map({})
+            else:
+                # 1件でも番号マップは更新（表示用）
+                paths = self._get_full_paths()
+                self.timeline_view.set_number_map({str(p): i + 1 for i, p in enumerate(paths)})
             return
         dur = float(self.spin_duration.value())
         self.timeline_view.set_duration(dur)
-        list_paths = [Path(self.list_widget.item(i).text()) for i in range(count)]
+        list_paths = self._get_full_paths()
+        # 番号マップ（リスト順 1..N）
+        number_map = {str(p): i + 1 for i, p in enumerate(list_paths)}
+        self.timeline_view.set_number_map(number_map)
         existing = {str(p): t for p, t in self.timeline_view.get_items()}
         # 既存が全て新か、既存が均一かを判定
         existing_times = sorted(existing.values()) if existing else []
@@ -357,20 +404,29 @@ class MainWindow(QMainWindow):
             self.label_computed.setText(f"算出エラー: {e}")
 
     def add_files(self, files):
-        existing = [self.list_widget.item(i).text() for i in range(self.list_widget.count())]
+        # existing full paths set
+        existing_full = {str(p) for p in self._get_full_paths()}
         added = False
         for f in files:
-            if len(existing) + self.list_widget.count() >= MAX_FILES:
-                pass
-            if f in existing:
+            full = str(Path(f).resolve())
+            # also check normalized string with original
+            if str(Path(f)) in existing_full or full in existing_full:
                 continue
             if self.list_widget.count() >= MAX_FILES:
                 QMessageBox.warning(self, "上限", f"最大{MAX_FILES}件までです。")
                 break
-            self.list_widget.addItem(f)
-            existing.append(f)
+            item = QListWidgetItem()
+            # store full path in UserRole, display will be numbered later
+            item.setData(Qt.UserRole, str(Path(f)))
+            # temporary text; will be renumbered
+            item.setText(Path(f).name)
+            item.setToolTip(str(Path(f)))
+            self.list_widget.addItem(item)
+            existing_full.add(str(Path(f)))
+            existing_full.add(full)
             added = True
         if added:
+            self._refresh_list_numbers()
             self._update_timeline_state()
 
     def on_add(self):
@@ -382,16 +438,16 @@ class MainWindow(QMainWindow):
         rows = sorted([i.row() for i in self.list_widget.selectedIndexes()], reverse=True)
         for r in rows:
             self.list_widget.takeItem(r)
+        self._refresh_list_numbers()
         self._update_timeline_state()
 
     def on_clear(self):
         self.list_widget.clear()
         self.timeline_view.set_items([])
+        self.timeline_view.set_number_map({})
         self._update_timeline_state()
 
     def move_selected(self, delta: int):
-        # move each selected item up/down preserving order
-        # タイムライン有効時はリスト順は出力に影響しないが、ユーザーの直感のため同期はしない
         selected = self.list_widget.selectedItems()
         if not selected:
             return
@@ -410,8 +466,11 @@ class MainWindow(QMainWindow):
                 item = self.list_widget.takeItem(r)
                 self.list_widget.insertItem(r + 1, item)
                 item.setSelected(True)
-        # リスト順変更はタイムラインの時刻には反映しない（タイムラインが正）
-        # 必要なら _sync_timeline() を呼ばずに維持
+        self._refresh_list_numbers()
+        # 番号マップのみ更新（時刻は維持）
+        paths = self._get_full_paths()
+        self.timeline_view.set_number_map({str(p): i + 1 for i, p in enumerate(paths)})
+        self.timeline_view.update()
 
     def on_browse_out(self):
         path, _ = QFileDialog.getSaveFileName(self, "出力BVH", "", "BVH (*.bvh)")
@@ -432,7 +491,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "エラー", f"入力は最大{MAX_FILES}件までです。")
             return
         # validate exists for all list items
-        all_inputs = [Path(self.list_widget.item(i).text()) for i in range(count)]
+        all_inputs = self._get_full_paths()
         missing = [str(p) for p in all_inputs if not p.exists()]
         if missing:
             QMessageBox.warning(self, "エラー", "存在しないファイル:\n" + "\n".join(missing))

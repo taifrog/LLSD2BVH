@@ -26,6 +26,10 @@ def main():
         win.add_files(samples[:3])
         win.spin_duration.setValue(5.0)
         win.edit_output.setText(str(ROOT / "dist" / "LLSD2BVH" / "output.bvh"))
+        # 重なりデモ用に2件目を0.4秒に寄せて縦ずらしを確認
+        items = win.timeline_view.get_items()
+        if len(items) == 3:
+            win.timeline_view.set_items([(items[0][0], 0.0), (items[1][0], 0.4), (items[2][0], 5.0)])
     win.show()
     # 描画を待ってからキャプチャ
     def grab_and_quit():
