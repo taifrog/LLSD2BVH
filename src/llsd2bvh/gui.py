@@ -311,16 +311,22 @@ class MainWindow(QMainWindow):
         # 端点（固定）の複製は特別扱い
         is_first = abs(src_t - 0.0) < 1e-9
         is_last = abs(src_t - dur) < 1e-9
-        if is_last:
-            # 末尾固定の複製は末尾の直前へ
+        is_last_copy = is_last and src_row == count - 2  # リストで末尾をコピーした場合
+        if is_last_copy:
             prev_ts = sorted([t for _, t in items if t < src_t - 1e-9])
             prev_t = prev_ts[-1] if prev_ts else 0.0
-            # 候補: D-0.05 と (prev+D)/2 の小さい方にしないで、epsを保つため max
             cand1 = dur - 0.05
             cand2 = (prev_t + dur) / 2
-            # prev との eps を保ちつつ、可能な限り D に近く
+            t_new_for_original = max(prev_t + 0.05, min(cand1, cand2) if prev_t + 0.10 <= dur else cand1)
+            t_new_for_original = max(prev_t + 0.05, min(t_new_for_original, dur - 0.05))
+            # 末尾複製は新末尾を D、元末尾を t_new_for_original に
+            t_new = t_new_for_original  # 一時保存、後で分岐で使用
+        elif is_last:
+            prev_ts = sorted([t for _, t in items if t < src_t - 1e-9])
+            prev_t = prev_ts[-1] if prev_ts else 0.0
+            cand1 = dur - 0.05
+            cand2 = (prev_t + dur) / 2
             t_new = max(prev_t + 0.05, min(cand1, cand2) if prev_t + 0.10 <= dur else cand1)
-            # さらに中間が prev+0.05 より小さい場合は prev+0.05
             t_new = max(prev_t + 0.05, min(t_new, dur - 0.05))
         elif is_first:
             next_ts = sorted([t for _, t in items if t > src_t + 1e-9])
@@ -340,9 +346,19 @@ class MainWindow(QMainWindow):
                     t_new = dur - 0.001
         t_new = max(0.001, min(t_new, dur - 0.001))
         t_new = max(0.0, min(t_new, dur))
-        # 既存 + 複製をソートしてセット
-        new_items = list(items) + [(src_path, float(t_new))]
-        new_items.sort(key=lambda x: x[1])
+        # リスト順で src の直後に挿入（タイムライン順＝リスト順）
+        insert_idx = src_row + 1
+        insert_idx = max(0, min(insert_idx, len(items)))
+        if is_last_copy:
+            # 末尾をコピー: 元末尾を t_new (=2.5等) に、新末尾を D に
+            # items の末尾が元末尾
+            new_items = list(items)
+            # 元末尾の時刻を t_new に更新
+            last_p, _ = new_items[-1]
+            new_items[-1] = (last_p, float(t_new))
+            new_items.append((src_path, float(dur)))
+        else:
+            new_items = list(items[:insert_idx]) + [(src_path, float(t_new))] + list(items[insert_idx:])
         self.timeline_view.set_items(new_items)
         # 番号振り直し（重複対応のため ordered_paths も更新）
         self._sync_number_map()
@@ -429,8 +445,42 @@ class MainWindow(QMainWindow):
 
     def _on_list_reordered(self, *args):
         self._refresh_list_numbers()
+        # タイムラインもリスト順に追従（時刻は保持）
+        # ドラッグ直後のリスト順にタイムラインを並べ替え
+        # 既存タイムラインの時刻を出現回数でマッピング
+        old_items = list(self.timeline_view.get_items())
+        # old_items はドラッグ前のリスト順だが、ドラッグ後はリストが既に入替わっているため、
+        # old_items の順序と新リストの順序を対応させる必要がある
+        # 簡易: タイムラインをリスト順に再ソート（時刻は保持せず均一再配置に近いが、既存時刻を再利用）
+        # ここでは _sync_timeline の非均一保持ロジックに委ねず、単に番号マップと並べ替えを行う
+        # 既存時刻を保持したままリスト順に並べ替えるため、old_map を使う
+        old_map: dict[tuple[str, int], float] = {}
+        occ = {}
+        for p, t in old_items:
+            k = str(p)
+            o = occ.get(k, 0)
+            old_map[(k, o)] = float(t)
+            occ[k] = o + 1
+        new_paths = self._get_full_paths()
+        new_occ = {}
+        new_items: list[tuple[Path, float]] = []
+        for p in new_paths:
+            k = str(p)
+            o = new_occ.get(k, 0)
+            new_occ[k] = o + 1
+            t = old_map.get((k, o))
+            if t is None and old_items:
+                # 新規があれば暫定
+                t = 0.0
+            if t is not None:
+                new_items.append((p, float(t)))
+        if new_items and len(new_items) == len(new_paths):
+            # 単調性を _enforce で保証
+            self.timeline_view.set_items(new_items)
         self._sync_number_map()
         self.timeline_view.update()
+        self._update_copy_button_state()
+        self._update_computed_label()
 
     def _sync_timeline(self):
         """list_widget の内容を timeline_view に同期"""
@@ -452,17 +502,16 @@ class MainWindow(QMainWindow):
         list_paths = self._get_full_paths()
         # 番号マップ（リスト順 1..N）重複対応
         self._sync_number_map()
-        existing = {str(p): t for p, t in self.timeline_view.get_items()}
-        # 既存が全て新か、既存が均一かを判定
-        existing_times = sorted(existing.values()) if existing else []
+        existing_items = self.timeline_view.get_items()  # リスト順
+        # 既存が空 or 均一なら均一再配置
         is_uniform = False
-        if len(existing_times) >= 2:
-            gaps = [existing_times[i + 1] - existing_times[i] for i in range(len(existing_times) - 1)]
+        if existing_items:
+            # リスト順での gaps（単調性が保たれている前提でソート不要）
+            gaps = [existing_items[i + 1][1] - existing_items[i][1] for i in range(len(existing_items) - 1)]
             if gaps and max(gaps) - min(gaps) <= 1e-4:
                 is_uniform = True
-        # 全て新規 or 既存が均一なら均一再配置、そうでなければ保持＋最大ギャップに挿入
-        if not existing or is_uniform:
-            # 均一再配置
+        if not existing_items or is_uniform:
+            # 均一再配置（リスト順）
             new_items: list[tuple[Path, float]] = []
             for i, p in enumerate(list_paths):
                 t = (i * dur / (count - 1)) if count > 1 else 0.0
@@ -470,45 +519,58 @@ class MainWindow(QMainWindow):
             self.timeline_view.set_items(new_items)
             self._update_computed_label()
             return
-        # 非均一保持: 既存は保持、新規は最大ギャップの中央へ
+        # 非均一保持: 既存はリスト順の出現回数で対応、新規は前後の中間へ（リスト順を保持）
+        # 既存を出現回数マップで保持
+        # Build map from (path_str, occurrence) -> time
+        existing_map: dict[tuple[str, int], float] = {}
+        occ_counter: dict[str, int] = {}
+        for p, t in existing_items:
+            k = str(p)
+            occ = occ_counter.get(k, 0)
+            existing_map[(k, occ)] = float(t)
+            occ_counter[k] = occ + 1
         new_items: list[tuple[Path, float]] = []
-        for p in list_paths:
-            key = str(p)
-            if key in existing:
-                new_items.append((p, existing[key]))
+        # 新リストの出現回数を数えながら構築
+        new_occ_counter: dict[str, int] = {}
+        for idx, p in enumerate(list_paths):
+            k = str(p)
+            occ = new_occ_counter.get(k, 0)
+            new_occ_counter[k] = occ + 1
+            if (k, occ) in existing_map:
+                # 既存の時刻を流用（リスト順を保持）
+                new_items.append((p, existing_map[(k, occ)]))
             else:
-                assigned_times = []
-                for pp, tt in new_items:
-                    assigned_times.append(tt)
-                for pp, tt in self.timeline_view.get_items():
-                    if str(pp) in [str(x) for x in list_paths] and str(pp) not in [str(x[0]) for x in new_items]:
-                        assigned_times.append(tt)
-                assigned_times.sort()
-                if len(assigned_times) < 1:
-                    t_new = dur / 2
-                elif len(assigned_times) == 1:
-                    if assigned_times[0] < dur / 2:
-                        t_new = (assigned_times[0] + dur) / 2
-                    else:
-                        t_new = assigned_times[0] / 2
+                # 新規: 前後の時刻から算出（リスト順）
+                # prev は new_items の直前、next は既存の対応する位置以降の時刻を推定
+                # 簡易: prev = new_items[-1] の時刻、next = 次の既存項目の時刻 or D
+                if not new_items:
+                    prev_t = 0.0
                 else:
-                    max_gap = -1
-                    gap_mid = dur / 2
-                    for i in range(len(assigned_times) - 1):
-                        gap = assigned_times[i + 1] - assigned_times[i]
-                        if gap > max_gap:
-                            max_gap = gap
-                            gap_mid = (assigned_times[i] + assigned_times[i + 1]) / 2
-                    # also check edges 0..first and last..D
-                        edge0_gap = assigned_times[0] - 0.0
-                        if edge0_gap > max_gap:
-                            max_gap = edge0_gap
-                            gap_mid = edge0_gap / 2
-                        edge1_gap = dur - assigned_times[-1]
-                        if edge1_gap > max_gap:
-                            gap_mid = assigned_times[-1] + edge1_gap / 2
-                        t_new = gap_mid
-                    new_items.append((p, float(t_new)))
+                    prev_t = new_items[-1][1]
+                # next は list_paths の idx+1 以降で既存に存在する最初の項目の時刻を探す
+                next_t = dur
+                # 既存の残りをリスト順で走査して次の一致を探す（近似: dur を使用）
+                # より正確には、既存_items の idx 付近の時刻を使うが、非均一時は dur で十分
+                # ここでは prev と dur の中間を暫定とし、後で _enforce で単調性を保証
+                # 要件に近い: prev+0.05 と中間の小さい方
+                # next_t を dur として計算
+                mid = (prev_t + next_t) / 2
+                t_new = min(prev_t + 0.05, mid) if new_items else 0.0
+                # 先頭は0固定、末尾はD固定のため、内側のみ上記を使用
+                if idx == count - 1:
+                    t_new = dur
+                elif idx == 0:
+                    t_new = 0.0
+                else:
+                    # prev と next の間に収める（next が dur の場合は上記 mid）
+                    # list順で next がまだ未確定のため dur で近似
+                    pass
+                # 末尾以外は prev+0.05 を優先しつつ D を超えない
+                if idx != 0 and idx != count - 1:
+                    # next が dur の場合、中間は大きくなるため prev+0.05 が選ばれる
+                    t_new = min(prev_t + 0.05, (prev_t + dur) / 2)
+                new_items.append((p, float(t_new)))
+        # 単調性を _enforce で保証するため、そのままセット
         self.timeline_view.set_items(new_items)
         self._update_computed_label()
 
@@ -609,6 +671,15 @@ class MainWindow(QMainWindow):
         selected = self.list_widget.selectedItems()
         if not selected:
             return
+        # タイムライン順＝リスト順のため、移動前のタイムラインを保持
+        old_items = list(self.timeline_view.get_items())
+        old_map: dict[tuple[str, int], float] = {}
+        occ = {}
+        for p, t in old_items:
+            k = str(p)
+            o = occ.get(k, 0)
+            old_map[(k, o)] = float(t)
+            occ[k] = o + 1
         rows = sorted([self.list_widget.row(i) for i in selected])
         if delta < 0:
             for r in rows:
@@ -625,10 +696,29 @@ class MainWindow(QMainWindow):
                 self.list_widget.insertItem(r + 1, item)
                 item.setSelected(True)
         self._refresh_list_numbers()
-        # 番号マップのみ更新（時刻は維持）重複対応
+        # タイムラインもリスト順に並べ替え（時刻は出現回数で対応）
+        new_paths = self._get_full_paths()
+        new_occ = {}
+        new_items: list[tuple[Path, float]] = []
+        for p in new_paths:
+            k = str(p)
+            o = new_occ.get(k, 0)
+            new_occ[k] = o + 1
+            t = old_map.get((k, o), None)
+            if t is None:
+                # 新規は前後の時刻から推定（均一に近い位置）
+                # 簡易: 前の時刻+0.05 or 0
+                if new_items:
+                    t = new_items[-1][1] + 0.05
+                else:
+                    t = 0.0
+            new_items.append((p, float(t)))
+        # 先頭0末尾Dを _enforce で保証
+        self.timeline_view.set_items(new_items)
         self._sync_number_map()
         self.timeline_view.update()
         self._update_copy_button_state()
+        self._update_computed_label()
 
     def on_browse_out(self):
         path, _ = QFileDialog.getSaveFileName(self, "出力BVH", "", "BVH (*.bvh)")

@@ -60,6 +60,10 @@ class TimelineView(QWidget):
         self.update()
 
     def get_items(self) -> List[Tuple[Path, float]]:
+        # リスト順（ファイルリスト番号順）を保持。タイムライン表示もリスト順。
+        return list(self._items)
+
+    def get_items_sorted(self) -> List[Tuple[Path, float]]:
         return sorted(self._items, key=lambda x: (x[1], str(x[0]).lower()))
 
     def set_number_map(self, m: Dict[str, int]):
@@ -93,14 +97,14 @@ class TimelineView(QWidget):
     def _enforce_endpoints(self):
         if not self._items:
             return
-        sorted_items = sorted(self._items, key=lambda x: x[1])
-        if len(sorted_items) == 1:
+        if len(self._items) == 1:
             return
-        new_sorted = []
-        for i, (p, t) in enumerate(sorted_items):
+        # リスト順を保持しつつ先頭0末尾Dを強制、かつリスト順で単調増加（eps 0.05）を保証
+        new_items: List[Tuple[Path, float]] = []
+        for i, (p, t) in enumerate(self._items):
             if i == 0:
                 t = 0.0
-            elif i == len(sorted_items) - 1:
+            elif i == len(self._items) - 1:
                 t = float(self._duration)
             else:
                 t = max(0.0, min(float(self._duration), float(t)))
@@ -108,12 +112,27 @@ class TimelineView(QWidget):
                     t = 0.001
                 if t >= self._duration - 0.001:
                     t = self._duration - 0.001
-            new_sorted.append((p, t))
-        new_sorted.sort(key=lambda x: x[1])
-        if len(new_sorted) >= 2:
-            new_sorted[0] = (new_sorted[0][0], 0.0)
-            new_sorted[-1] = (new_sorted[-1][0], float(self._duration))
-        self._items = new_sorted
+            new_items.append((p, float(t)))
+        # リスト順で単調増加を強制（eps 0.05）
+        for i in range(1, len(new_items)):
+            prev_t = new_items[i - 1][1]
+            cur_p, cur_t = new_items[i]
+            if cur_t <= prev_t + 0.05 - 1e-9:
+                # D固定の末尾は動かさないが、それ以外は prev+0.05 に補正
+                if i == len(new_items) - 1:
+                    # 末尾は D 固定のため、詰まったら前側を詰める方向は複雑なので、
+                    # ここでは cur を D のままにし、後で前側を調整する代わりに単純にクランプ
+                    # 前側が詰まりすぎた場合は末尾との gap が 0.05 未満になるが、_enforce では許容
+                    pass
+                else:
+                    cur_t = prev_t + 0.05
+                    cur_t = min(cur_t, float(self._duration) - 0.001)
+                    new_items[i] = (cur_p, float(cur_t))
+        # 先頭末尾を再強制
+        if len(new_items) >= 2:
+            new_items[0] = (new_items[0][0], 0.0)
+            new_items[-1] = (new_items[-1][0], float(self._duration))
+        self._items = new_items
 
     def _time_to_x(self, t: float, width: int) -> int:
         avail = width - PADDING_L - PADDING_R - BLOCK_W
@@ -310,7 +329,7 @@ class TimelineView(QWidget):
         if self._drag_idx is not None and event.buttons() & Qt.LeftButton:
             new_x = event.pos().x() - self._drag_offset
             new_t = self._x_to_time(new_x, w)
-            items = self.get_items()
+            items = self.get_items()  # リスト順
             eps = 0.05
             if self._drag_idx > 0:
                 prev_t = items[self._drag_idx - 1][1]
@@ -319,28 +338,9 @@ class TimelineView(QWidget):
                 next_t = items[self._drag_idx + 1][1]
                 new_t = min(new_t, next_t - eps)
             new_t = max(0.0, min(self._duration, new_t))
-            sorted_items = self.get_items()
-            p, _ = sorted_items[self._drag_idx]
-            # 重複対応: drag対象の出現回数で特定
-            target_str = str(p)
-            occ = sum(1 for j in range(self._drag_idx + 1) if str(sorted_items[j][0]) == target_str)
-            cur = 0
-            for i, (pp, _) in enumerate(self._items):
-                if str(pp) == target_str:
-                    cur += 1
-                    if cur == occ:
-                        self._items[i] = (pp, new_t)
-                        break
-            self._items.sort(key=lambda x: x[1])
-            # 新しい drag_idx を同一出現回数で再特定
-            new_sorted = self.get_items()
-            cur = 0
-            for i, (pp, _) in enumerate(new_sorted):
-                if str(pp) == target_str:
-                    cur += 1
-                    if cur == occ:
-                        self._drag_idx = i
-                        break
+            # リスト順を保持、ソートしない（順番はファイルリスト側で制御）
+            p, _ = items[self._drag_idx]
+            self._items[self._drag_idx] = (p, float(new_t))
             self.timeChanged.emit()
             self.update()
         else:
@@ -364,7 +364,7 @@ class TimelineView(QWidget):
         idx = self._hit_test(event.pos())
         if idx is None:
             return
-        items = self.get_items()
+        items = self.get_items()  # リスト順
         if len(items) >= 2 and (idx == 0 or idx == len(items) - 1):
             return
         p, t = items[idx]
@@ -377,17 +377,7 @@ class TimelineView(QWidget):
             if idx < len(items) - 1:
                 next_t = items[idx + 1][1]
                 val = min(val, next_t - eps)
-            # 重複対応で出現回数で特定
-            target_str = str(p)
-            occ = sum(1 for j in range(idx + 1) if str(items[j][0]) == target_str)
-            cur = 0
-            for i, (pp, _) in enumerate(self._items):
-                if str(pp) == target_str:
-                    cur += 1
-                    if cur == occ:
-                        self._items[i] = (pp, float(val))
-                        break
-            self._items.sort(key=lambda x: x[1])
+            self._items[idx] = (p, float(val))
             self._enforce_endpoints()
             self.timeChanged.emit()
             self.update()
