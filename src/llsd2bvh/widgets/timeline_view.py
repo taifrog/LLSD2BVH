@@ -98,31 +98,30 @@ class TimelineView(QWidget):
         if not self._items:
             return
         if len(self._items) == 1:
+            # 単独時は P1@D（Tposeは0はBVH側で付与、タイムラインは P1 のみ）
+            p, t = self._items[0]
+            self._items[0] = (p, float(self._duration))
             return
-        # リスト順を保持しつつ先頭0末尾Dを強制、かつリスト順で単調増加（eps 0.05）を保証
+        # リスト順を保持しつつ先頭 dt= D/N 末尾 D を強制、単調増加（eps 0.05）
+        n = len(self._items)
+        dt = float(self._duration) / n if n > 0 else 0.0
         new_items: List[Tuple[Path, float]] = []
         for i, (p, t) in enumerate(self._items):
             if i == 0:
-                t = 0.0
+                t = dt
             elif i == len(self._items) - 1:
                 t = float(self._duration)
             else:
-                t = max(0.0, min(float(self._duration), float(t)))
-                if t <= 0.001:
-                    t = 0.001
-                if t >= self._duration - 0.001:
-                    t = self._duration - 0.001
+                t = max(dt + 1e-9, min(float(self._duration) - 0.001, float(t)))
+                if t <= dt:
+                    t = dt + 0.001
             new_items.append((p, float(t)))
         # リスト順で単調増加を強制（eps 0.05）
         for i in range(1, len(new_items)):
             prev_t = new_items[i - 1][1]
             cur_p, cur_t = new_items[i]
             if cur_t <= prev_t + 0.05 - 1e-9:
-                # D固定の末尾は動かさないが、それ以外は prev+0.05 に補正
                 if i == len(new_items) - 1:
-                    # 末尾は D 固定のため、詰まったら前側を詰める方向は複雑なので、
-                    # ここでは cur を D のままにし、後で前側を調整する代わりに単純にクランプ
-                    # 前側が詰まりすぎた場合は末尾との gap が 0.05 未満になるが、_enforce では許容
                     pass
                 else:
                     cur_t = prev_t + 0.05
@@ -130,7 +129,7 @@ class TimelineView(QWidget):
                     new_items[i] = (cur_p, float(cur_t))
         # 先頭末尾を再強制
         if len(new_items) >= 2:
-            new_items[0] = (new_items[0][0], 0.0)
+            new_items[0] = (new_items[0][0], float(dt))
             new_items[-1] = (new_items[-1][0], float(self._duration))
         self._items = new_items
 

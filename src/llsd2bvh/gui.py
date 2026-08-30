@@ -424,16 +424,26 @@ class MainWindow(QMainWindow):
         self.timeline_view.set_duration(new_dur)
         items = self.timeline_view.get_items()
         if items:
-            # scale intermediate times proportionally to keep relative positions
+            # Tposeを除いた n 点は dt..D に配置。リサイズ時は比率を保持しつつ
+            # 先頭は new_dt, 末尾は new_dur に
+            n = len(items)
+            new_dt = new_dur / n if n > 0 else 0.0
+            old_dt = old_dur / n if n > 0 else 0.0
             scaled = []
             for idx, (p, t) in enumerate(items):
                 if idx == 0:
-                    scaled.append((p, 0.0))
+                    scaled.append((p, float(new_dt)))
                 elif idx == len(items) - 1:
                     scaled.append((p, new_dur))
                 else:
+                    # 中間は 0..D ではなく dt..D の比率でスケール
                     if old_dur > 1e-9:
-                        nt = t / old_dur * new_dur
+                        # t は old_dt..old_dur の範囲、比率で new_dt..new_dur へ
+                        if old_dur - old_dt > 1e-9:
+                            ratio = (t - old_dt) / (old_dur - old_dt)
+                        else:
+                            ratio = 0.0
+                        nt = new_dt + ratio * (new_dur - new_dt)
                     else:
                         nt = t
                     scaled.append((p, float(nt)))
@@ -511,10 +521,15 @@ class MainWindow(QMainWindow):
             if gaps and max(gaps) - min(gaps) <= 1e-4:
                 is_uniform = True
         if not existing_items or is_uniform:
-            # 均一再配置（リスト順）
+            # 均一再配置（リスト順）Tposeを除いた n 点を dt..D に配置
+            # Frame Time = D / n, P1@dt ... Pn@D, Tpose@0 は BVH出力時に付与
+            dt = dur / count if count > 0 else dur
             new_items: list[tuple[Path, float]] = []
             for i, p in enumerate(list_paths):
-                t = (i * dur / (count - 1)) if count > 1 else 0.0
+                t = (i + 1) * dt
+                # 最終は D にクランプ
+                if i == count - 1:
+                    t = dur
                 new_items.append((p, float(t)))
             self.timeline_view.set_items(new_items)
             self._update_computed_label()
@@ -580,8 +595,13 @@ class MainWindow(QMainWindow):
             self.label_computed.setText("算出: -")
             return
         if count == 1:
-            dt = 0.0333333
-            self.label_computed.setText(f"Frame Time: {dt:.4f}  総フレーム: 1（固定）")
+            dur = float(self.spin_duration.value())
+            # 常時Tpose: P1は D に配置、Tposeは0、Frame Time = D/1
+            dt = dur / 1 if count >= 1 else 0.0333333
+            if dt < MIN_FRAME_TIME:
+                dt = MIN_FRAME_TIME
+            # 表示は総フレーム n+1（Tpose含む）
+            self.label_computed.setText(f"Frame Time: {dt:.4f}  総フレーム: 2（Tpose+1）")
             return
         try:
             items = self.timeline_view.get_items()
@@ -589,30 +609,30 @@ class MainWindow(QMainWindow):
                 self.label_computed.setText("算出: -（同期中）")
                 return
             # quick compute without parsing files (use dummy data for dt only)
-            # we need key_times for dt calc; use timeline times directly
+            # key_times は Tposeを除いた P1..Pn の n 点（dt..D）
             key_times = [t for _, t in items]
-            # use dummy keyframes_data length to compute dt
             dummy = [{} for _ in range(count)]
             from .timeline import compute_timeline_frames
             dt, _, inserted = compute_timeline_frames(float(self.spin_duration.value()), dummy, key_times)
-            # total frames after interpolation
-            # estimate total frames: if uniform -> count, else computed inside
-            # we already have dt, compute F
+            # Tposeを除いた n 点での dt/inserted、総フレームは Tpose+1 を加算
+            # 均一時 total_user = n, 非均一 total_user = n+inserted (=F)
             if count == 2:
-                total = 2
+                total_user = 2
+                # dt は D/2 のはず
+                inserted_user = 0
             else:
-                # recompute with real logic: if uniform, total=count else F
-                # compute_timeline_frames returns inserted, so total = count + inserted
-                # we have dummy, so inserted is accurate
-                total = count + inserted
-                # if non-uniform, total from dt
-                # verify: total = round(duration/dt)+1
-                import math
                 if inserted > 0:
-                    total = int(round(float(self.spin_duration.value()) / dt)) + 1
-            msg = f"算出 Frame Time: {dt:.4f}  総フレーム: {total}"
-            if inserted > 0:
-                msg += f"（+{inserted}補間）"
+                    import math
+                    total_user = int(round(float(self.spin_duration.value()) / dt)) + 1
+                    # 非均一時の dt は min_gap 基準、total_user は F
+                    inserted_user = total_user - count
+                else:
+                    total_user = count
+                    inserted_user = 0
+            total = total_user + 1  # Tpose分
+            msg = f"算出 Frame Time: {dt:.4f}  総フレーム: {total}（Tpose+{total_user}）"
+            if inserted_user > 0:
+                msg += f"（+{inserted_user}補間）"
             if dt < MIN_FRAME_TIME + 1e-9:
                 msg += "  ※最小0.01でクランプ"
             self.label_computed.setText(msg)
@@ -784,24 +804,19 @@ class MainWindow(QMainWindow):
         include_tail = False
         include_hands = not self.chk_no_hands.isChecked()
 
-        # timeline分岐
+        # 常時Tposeを先頭に追加。Frame Time = D / n、総フレーム = n+1
+        # タイムライン分岐（Tposeを除いた n 点で計算）
         use_timeline = count >= 2
         if use_timeline:
-            # timeline順にソートされた Path, time
-            timeline_items = self.timeline_view.get_items()
-            # listとtimelineの整合性チェック
+            timeline_items = self.timeline_view.get_items()  # リスト順、P1..Pn は dt..D
             if len(timeline_items) != count:
                 QMessageBox.warning(self, "エラー", "タイムラインと入力リストが不一致です。ファイルを再追加してください。")
                 return
-            # duration
             duration = float(self.spin_duration.value())
-            # inputs は timeline順
             inputs = [p for p, _ in timeline_items]
-            key_times = [float(t) for _, t in timeline_items]
-            # enforce 0 and D (should already)
-            key_times[0] = 0.0
-            key_times[-1] = duration
-            # out_path
+            key_times = [float(t) for _, t in timeline_items]  # dt..D
+            # duration と整合（先頭は dt、末尾は D）
+            # 呼出側で Tpose を除外して計算するため、key_times は dt..D のまま
             if out_text:
                 out_path = Path(out_text)
             else:
@@ -813,7 +828,6 @@ class MainWindow(QMainWindow):
             try:
                 bones = load_skeleton(skel_path)
                 bones = filter_skeleton(bones, include_face=include_face, include_tail=include_tail, include_hands=include_hands)
-                # parse all
                 keyframes_data: list[dict] = []
                 for idx, inp in enumerate(inputs):
                     self.log_msg(f"  [{idx+1}/{count}] {inp.name} 解析中... t={key_times[idx]:.2f}s")
@@ -821,15 +835,25 @@ class MainWindow(QMainWindow):
                     data = parse_llsd_xml(inp)
                     keyframes_data.append(data)
                     self.progress.setValue(idx + 1)
-                # compute uniform frames
-                frame_time, frames, inserted = compute_timeline_frames(duration, keyframes_data, key_times)
+                # Tposeを除いた n 点で Frame Time を算出
+                # 非均一時は全体で1つの Frame Time で必要な追加フレームを補間
+                frame_time, frames_user, inserted = compute_timeline_frames(duration, keyframes_data, key_times)
                 if frame_time < MIN_FRAME_TIME:
                     frame_time = MIN_FRAME_TIME
-                self.log_msg(f"  タイムライン解析: duration={duration}s, dt={frame_time:.5f}, 総フレーム={len(frames)} (補間+{inserted})")
+                # Frame Time は D / n が基本だが、非均一時の compute が min_gap から算出した dt を優先
+                # 均一時（inserted==0）は D/n と一致するはず
+                # 総フレームは Tpose + frames_user
+                tpose_frame: dict = {}
+                frames = [tpose_frame] + frames_user
+                # Frame Time は compute の dt をそのまま使用（Tposeを含めた n+1 フレームで duration をカバー）
+                # ただし n 点が dt..D に配置されているため、Tpose(0) から P1(dt) の gap も dt で均一
+                # そのため total duration = len(frames)-1 * frame_time = D となる
+                self.log_msg(f"  タイムライン解析: duration={duration}s, dt={frame_time:.5f}, ユーザフレーム={len(frames_user)} (補間+{inserted}) 総フレーム={len(frames)}（Tpose+{len(frames_user)}）")
                 self.log_msg(f"HIERARCHY 構築: {len(bones)} bones")
-                write_bvh_frames(frames, bones, out_path, frame_time=frame_time, units=units, sl_compat=sl_compat, include_face=include_face, include_tail=include_tail)
+                # Tposeは呼出側で付与済みのため sl_compat は False で二重挿入を避ける
+                write_bvh_frames(frames, bones, out_path, frame_time=frame_time, units=units, sl_compat=False, include_face=include_face, include_tail=include_tail)
                 self.log_msg(f"書き出し完了: {out_path} ({len(frames)}フレーム, dt={frame_time:.5f})")
-                QMessageBox.information(self, "完了", f"変換が完了しました:\n{out_path}\n{len(frames)}フレーム (dt={frame_time:.5f}, 補間+{inserted})")
+                QMessageBox.information(self, "完了", f"変換が完了しました:\n{out_path}\n{len(frames)}フレーム (dt={frame_time:.5f}, 補間+{inserted}, Tpose含む)")
             except Exception as e:
                 import traceback
                 traceback.print_exc()
@@ -839,17 +863,20 @@ class MainWindow(QMainWindow):
                 self.progress.setVisible(False)
             return
         else:
-            # 1件: Frame Time は固定 0.0333333（変更不可）
+            # 1件: 常時Tpose挿入で Frames:2
             inputs = all_inputs
-            frame_time = 0.0333333
+            duration = float(self.spin_duration.value())
+            frame_time = duration / 1 if duration > 1e-9 else 0.0333333
+            if frame_time < MIN_FRAME_TIME:
+                frame_time = MIN_FRAME_TIME
             if out_text:
                 out_path = Path(out_text)
             else:
                 out_path = inputs[0].with_suffix(".bvh")
             self.progress.setVisible(True)
-            self.progress.setMaximum(count)
+            self.progress.setMaximum(count + 1)
             self.progress.setValue(0)
-            self.log_msg(f"変換開始: {count}件 → {out_path}")
+            self.log_msg(f"変換開始: {count}件 duration={duration}s → {out_path} (Tpose+1)")
             try:
                 bones = load_skeleton(skel_path)
                 bones = filter_skeleton(bones, include_face=include_face, include_tail=include_tail, include_hands=include_hands)
@@ -860,10 +887,12 @@ class MainWindow(QMainWindow):
                     data = parse_llsd_xml(inp)
                     frames.append(data)
                     self.progress.setValue(idx + 1)
+                tpose_frame: dict = {}
+                frames = [tpose_frame] + frames
                 self.log_msg(f"HIERARCHY 構築: {len(bones)} bones")
-                write_bvh_frames(frames, bones, out_path, frame_time=frame_time, units=units, sl_compat=sl_compat, include_face=include_face, include_tail=include_tail)
-                self.log_msg(f"書き出し完了: {out_path} ({len(frames)}フレーム)")
-                QMessageBox.information(self, "完了", f"変換が完了しました:\n{out_path}\n{len(frames)}フレーム")
+                write_bvh_frames(frames, bones, out_path, frame_time=frame_time, units=units, sl_compat=False, include_face=include_face, include_tail=include_tail)
+                self.log_msg(f"書き出し完了: {out_path} ({len(frames)}フレーム, dt={frame_time:.5f}, Tpose含む)")
+                QMessageBox.information(self, "完了", f"変換が完了しました:\n{out_path}\n{len(frames)}フレーム (Tpose含む)")
             except Exception as e:
                 import traceback
                 traceback.print_exc()
