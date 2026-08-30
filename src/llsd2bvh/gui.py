@@ -90,10 +90,13 @@ class MainWindow(QMainWindow):
         btn_row = QHBoxLayout()
         self.btn_add = QPushButton("追加…")
         self.btn_remove = QPushButton("削除")
+        self.btn_copy = QPushButton("コピー")
+        self.btn_copy.setToolTip("選択中の1件を複製して直後に挿入（最大20件）")
+        self.btn_copy.setEnabled(False)
         self.btn_up = QPushButton("↑")
         self.btn_down = QPushButton("↓")
         self.btn_clear = QPushButton("クリア")
-        for b in [self.btn_add, self.btn_remove, self.btn_up, self.btn_down, self.btn_clear]:
+        for b in [self.btn_add, self.btn_remove, self.btn_copy, self.btn_up, self.btn_down, self.btn_clear]:
             btn_row.addWidget(b)
         btn_row.addStretch()
         layout.addLayout(btn_row)
@@ -194,6 +197,7 @@ class MainWindow(QMainWindow):
         # connections
         self.btn_add.clicked.connect(self.on_add)
         self.btn_remove.clicked.connect(self.on_remove)
+        self.btn_copy.clicked.connect(self.on_copy)
         self.btn_up.clicked.connect(lambda: self.move_selected(-1))
         self.btn_down.clicked.connect(lambda: self.move_selected(1))
         self.btn_clear.clicked.connect(self.on_clear)
@@ -203,6 +207,7 @@ class MainWindow(QMainWindow):
         self.btn_close.clicked.connect(self.close)
         self.spin_duration.valueChanged.connect(self._on_duration_changed)
         self.timeline_view.timeChanged.connect(self._on_timeline_changed)
+        self.list_widget.itemSelectionChanged.connect(self._update_copy_button_state)
         # リスト内部ドラッグ並替後も番号を振り直す
         try:
             self.list_widget.model().rowsMoved.connect(self._on_list_reordered)
@@ -212,6 +217,147 @@ class MainWindow(QMainWindow):
     # helpers
     def log_msg(self, msg: str):
         self.log.append(msg)
+
+    def _update_copy_button_state(self):
+        sel = self.list_widget.selectedItems()
+        self.btn_copy.setEnabled(len(sel) == 1 and self.list_widget.count() < MAX_FILES)
+
+    def on_copy(self):
+        sel = self.list_widget.selectedItems()
+        if len(sel) != 1:
+            QMessageBox.warning(self, "コピー", "コピーは1件選択時のみ可能です。")
+            return
+        if self.list_widget.count() >= MAX_FILES:
+            QMessageBox.warning(self, "上限", f"最大{MAX_FILES}件までです。")
+            return
+        src_item = sel[0]
+        src_row = self.list_widget.row(src_item)
+        src_path_str = src_item.data(Qt.UserRole)
+        if not src_path_str:
+            # fallback
+            src_path_str = src_item.text().split(". ", 1)[-1]
+        src_path = Path(src_path_str)
+        # リストへ挿入（重複許容 — add_filesを経由しない）
+        new_item = QListWidgetItem()
+        new_item.setData(Qt.UserRole, src_path_str)
+        new_item.setToolTip(str(src_path_str))
+        # 一時テキスト、後で _refresh_list_numbers で振り直し
+        new_item.setText(Path(src_path_str).name)
+        self.list_widget.insertItem(src_row + 1, new_item)
+        self._refresh_list_numbers()
+        self.list_widget.clearSelection()
+        new_item.setSelected(True)
+        # タイムラインへ挿入
+        self._insert_duplicate_into_timeline(src_path, src_row)
+        self._update_copy_button_state()
+        self._update_computed_label()
+
+    def _insert_duplicate_into_timeline(self, src_path: Path, src_row: int):
+        count = self.list_widget.count()
+        dur = float(self.spin_duration.value())
+        paths = self._get_full_paths()
+        # 番号マップは常にリスト順で振り直し（重複対応）
+        self._sync_number_map()
+        if count < 2:
+            if count == 0:
+                self.timeline_view.set_items([])
+            elif count == 1:
+                # 1件時はタイムライン無効だが番号だけ更新
+                pass
+            self._update_timeline_state()
+            return
+        # 2件以上: 既存タイムラインに複製を追加
+        items = self.timeline_view.get_items()  # sorted
+        # 1件からの遷移（以前 timeline が空）や不整合時は均一再配置で作成
+        if len(items) != count - 1:
+            self._sync_timeline()
+            # _sync_timeline は均一で作成済みだが、要件の src直後配置を保証するため
+            # 均一結果をそのまま使う（0 と D の2件なら src直後ではないが、1->2では許容）
+            # 2件以上で既存が空だった場合は再取得して補正
+            items = self.timeline_view.get_items()
+            if len(items) == count:
+                # 既にカウント一致（均一作成で完了）
+                self._update_computed_label()
+                return
+            # それでも不一致なら通常追加ロジックへフォールスルー
+        # 以降は items が count-1 件存在する前提で複製を追加
+        # src_t をリスト行に対応する出現回数で特定
+        ordered = self._get_full_paths()
+        src_str = str(src_path)
+        # src_row は複製元の行。挿入後の ordered では src_row が元、src_row+1 が複製
+        # 元の出現回数（0-based）を求める
+        occ = sum(1 for i in range(src_row + 1) if str(ordered[i]) == src_str) - 1
+        # 但し ordered は挿入後のため、複製分を除けば src の occ は上記 - (複製が同パスなら1)
+        # 実際には ordered[src_row] が元なので、src_row までのカウントで occ を得るのは正確
+        # ただし上記は挿入後のカウントなので、複製が src と同パスなら occ が1多くなる
+        # そのため occ を1減らす補正は不要（src_row までのカウントは元を含むが複製は src_row+1 なので含まない）
+        # 正しくは src_row までのカウント -1 が occ
+        # 上記式は既に -1 しているので正しい
+        # タイムライン側で occ 回目の出現の時刻を取得
+        src_t = None
+        cur = -1
+        for p, t in items:
+            if str(p) == src_str:
+                cur += 1
+                if cur == occ:
+                    src_t = t
+                    break
+        if src_t is None:
+            src_candidates = [(p, t) for p, t in items if str(p) == src_str]
+            if src_candidates:
+                src_t = src_candidates[-1][1]
+            else:
+                src_t = dur / 2
+        # 端点（固定）の複製は特別扱い
+        is_first = abs(src_t - 0.0) < 1e-9
+        is_last = abs(src_t - dur) < 1e-9
+        if is_last:
+            # 末尾固定の複製は末尾の直前へ
+            prev_ts = sorted([t for _, t in items if t < src_t - 1e-9])
+            prev_t = prev_ts[-1] if prev_ts else 0.0
+            # 候補: D-0.05 と (prev+D)/2 の小さい方にしないで、epsを保つため max
+            cand1 = dur - 0.05
+            cand2 = (prev_t + dur) / 2
+            # prev との eps を保ちつつ、可能な限り D に近く
+            t_new = max(prev_t + 0.05, min(cand1, cand2) if prev_t + 0.10 <= dur else cand1)
+            # さらに中間が prev+0.05 より小さい場合は prev+0.05
+            t_new = max(prev_t + 0.05, min(t_new, dur - 0.05))
+        elif is_first:
+            next_ts = sorted([t for _, t in items if t > src_t + 1e-9])
+            next_t = next_ts[0] if next_ts else dur
+            t_new = min(src_t + 0.05, (src_t + next_t) / 2)
+            t_new = max(src_t + 0.05, min(t_new, next_t - 0.05)) if next_t - src_t >= 0.10 else src_t + 0.05
+        else:
+            next_ts = sorted([t for _, t in items if t > src_t + 1e-9])
+            next_t = next_ts[0] if next_ts else dur
+            mid = (src_t + next_t) / 2
+            t_new = min(src_t + 0.05, mid)
+            if next_t - src_t >= 0.10:
+                t_new = max(src_t + 0.05, min(t_new, next_t - 0.05))
+            else:
+                t_new = src_t + 0.05
+                if t_new > dur - 0.001:
+                    t_new = dur - 0.001
+        t_new = max(0.001, min(t_new, dur - 0.001))
+        t_new = max(0.0, min(t_new, dur))
+        # 既存 + 複製をソートしてセット
+        new_items = list(items) + [(src_path, float(t_new))]
+        new_items.sort(key=lambda x: x[1])
+        self.timeline_view.set_items(new_items)
+        # 番号振り直し（重複対応のため ordered_paths も更新）
+        self._sync_number_map()
+        self._update_computed_label()
+
+    def _sync_number_map(self):
+        paths = self._get_full_paths()
+        tmp = {}
+        for i, p in enumerate(paths):
+            tmp[str(p)] = i + 1
+        self.timeline_view.set_number_map(tmp)
+        try:
+            self.timeline_view.set_ordered_paths(paths)
+        except AttributeError:
+            pass
 
     # --- timeline helpers ---
     def _update_timeline_state(self):
@@ -226,6 +372,7 @@ class MainWindow(QMainWindow):
         if has_timeline:
             self._sync_timeline()
         self._update_computed_label()
+        self._update_copy_button_state()
 
     def _get_full_paths(self) -> list[Path]:
         paths: list[Path] = []
@@ -282,8 +429,7 @@ class MainWindow(QMainWindow):
 
     def _on_list_reordered(self, *args):
         self._refresh_list_numbers()
-        paths = self._get_full_paths()
-        self.timeline_view.set_number_map({str(p): i + 1 for i, p in enumerate(paths)})
+        self._sync_number_map()
         self.timeline_view.update()
 
     def _sync_timeline(self):
@@ -293,17 +439,19 @@ class MainWindow(QMainWindow):
             if count == 0:
                 self.timeline_view.set_items([])
                 self.timeline_view.set_number_map({})
+                try:
+                    self.timeline_view.set_ordered_paths([])
+                except AttributeError:
+                    pass
             else:
                 # 1件でも番号マップは更新（表示用）
-                paths = self._get_full_paths()
-                self.timeline_view.set_number_map({str(p): i + 1 for i, p in enumerate(paths)})
+                self._sync_number_map()
             return
         dur = float(self.spin_duration.value())
         self.timeline_view.set_duration(dur)
         list_paths = self._get_full_paths()
-        # 番号マップ（リスト順 1..N）
-        number_map = {str(p): i + 1 for i, p in enumerate(list_paths)}
-        self.timeline_view.set_number_map(number_map)
+        # 番号マップ（リスト順 1..N）重複対応
+        self._sync_number_map()
         existing = {str(p): t for p, t in self.timeline_view.get_items()}
         # 既存が全て新か、既存が均一かを判定
         existing_times = sorted(existing.values()) if existing else []
@@ -451,6 +599,10 @@ class MainWindow(QMainWindow):
         self.list_widget.clear()
         self.timeline_view.set_items([])
         self.timeline_view.set_number_map({})
+        try:
+            self.timeline_view.set_ordered_paths([])
+        except AttributeError:
+            pass
         self._update_timeline_state()
 
     def move_selected(self, delta: int):
@@ -473,10 +625,10 @@ class MainWindow(QMainWindow):
                 self.list_widget.insertItem(r + 1, item)
                 item.setSelected(True)
         self._refresh_list_numbers()
-        # 番号マップのみ更新（時刻は維持）
-        paths = self._get_full_paths()
-        self.timeline_view.set_number_map({str(p): i + 1 for i, p in enumerate(paths)})
+        # 番号マップのみ更新（時刻は維持）重複対応
+        self._sync_number_map()
         self.timeline_view.update()
+        self._update_copy_button_state()
 
     def on_browse_out(self):
         path, _ = QFileDialog.getSaveFileName(self, "出力BVH", "", "BVH (*.bvh)")

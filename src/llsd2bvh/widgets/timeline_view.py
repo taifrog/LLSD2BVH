@@ -41,6 +41,7 @@ class TimelineView(QWidget):
         self._duration = 5.0
         self._items: List[Tuple[Path, float]] = []
         self._number_map: Dict[str, int] = {}
+        self._ordered_paths: List[Path] = []
         self._drag_idx: int | None = None
         self._drag_offset = 0
         self._hover_idx: int | None = None
@@ -64,6 +65,30 @@ class TimelineView(QWidget):
     def set_number_map(self, m: Dict[str, int]):
         self._number_map = dict(m)
         self.update()
+
+    def set_ordered_paths(self, paths: List[Path]):
+        """重複対応のリスト順番号（1..N）を保持。paintで優先参照。"""
+        self._ordered_paths = list(paths)
+        self.update()
+
+    def _resolve_number(self, p: Path, idx: int, items: List[Tuple[Path, float]]) -> int:
+        # 重複対応: 同一パスの出現回数で ordered_paths の n回目の出現位置を返す
+        if self._ordered_paths:
+            # idx までの同一パス出現回数（0-based）
+            occ_idx = 0
+            target_str = str(p)
+            for j in range(idx):
+                if str(items[j][0]) == target_str:
+                    occ_idx += 1
+            # ordered_paths 側で occ_idx 回目の出現を探す
+            cur = -1
+            for oi, op in enumerate(self._ordered_paths):
+                if str(op) == target_str:
+                    cur += 1
+                    if cur == occ_idx:
+                        return oi + 1
+        # フォールバック: 旧 dict or idx+1
+        return self._number_map.get(str(p), idx + 1)
 
     def _enforce_endpoints(self):
         if not self._items:
@@ -224,8 +249,8 @@ class TimelineView(QWidget):
             painter.setBrush(QBrush(fill))
             painter.drawRoundedRect(rect_x, rect_y, BLOCK_W, BLOCK_H, 6, 6)
 
-            # 番号＋ファイル名（番号は必須）
-            num = self._number_map.get(str(p), idx + 1)
+            # 番号＋ファイル名（番号は必須、重複対応）
+            num = self._resolve_number(p, idx, items)
             painter.setPen(_BLOCK_TEXT)
             font = QFont(self.font())
             font.setPointSize(8)
@@ -296,15 +321,26 @@ class TimelineView(QWidget):
             new_t = max(0.0, min(self._duration, new_t))
             sorted_items = self.get_items()
             p, _ = sorted_items[self._drag_idx]
+            # 重複対応: drag対象の出現回数で特定
+            target_str = str(p)
+            occ = sum(1 for j in range(self._drag_idx + 1) if str(sorted_items[j][0]) == target_str)
+            cur = 0
             for i, (pp, _) in enumerate(self._items):
-                if pp == p:
-                    self._items[i] = (pp, new_t)
-                    break
+                if str(pp) == target_str:
+                    cur += 1
+                    if cur == occ:
+                        self._items[i] = (pp, new_t)
+                        break
             self._items.sort(key=lambda x: x[1])
-            for i, (pp, _) in enumerate(self.get_items()):
-                if pp == p:
-                    self._drag_idx = i
-                    break
+            # 新しい drag_idx を同一出現回数で再特定
+            new_sorted = self.get_items()
+            cur = 0
+            for i, (pp, _) in enumerate(new_sorted):
+                if str(pp) == target_str:
+                    cur += 1
+                    if cur == occ:
+                        self._drag_idx = i
+                        break
             self.timeChanged.emit()
             self.update()
         else:
@@ -341,10 +377,16 @@ class TimelineView(QWidget):
             if idx < len(items) - 1:
                 next_t = items[idx + 1][1]
                 val = min(val, next_t - eps)
+            # 重複対応で出現回数で特定
+            target_str = str(p)
+            occ = sum(1 for j in range(idx + 1) if str(items[j][0]) == target_str)
+            cur = 0
             for i, (pp, _) in enumerate(self._items):
-                if pp == p:
-                    self._items[i] = (pp, float(val))
-                    break
+                if str(pp) == target_str:
+                    cur += 1
+                    if cur == occ:
+                        self._items[i] = (pp, float(val))
+                        break
             self._items.sort(key=lambda x: x[1])
             self._enforce_endpoints()
             self.timeChanged.emit()
