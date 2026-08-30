@@ -158,18 +158,16 @@ def compute_timeline_frames(
     n = len(keyframes_data)
     if n == 0:
         raise ValueError("no keyframes")
-    # n は Tposeを除いたユーザフレーム数。duration D に対して
-    # 全体を Tpose + n 点で n+1 フレームとみなし、Frame Time = D / n。
-    # ここでは P1..Pn の n 点のみを扱い、Tposeは呼出側で先頭に追加される。
-    # 均一時の gap は D/n ではなく、P1..Pn が dt..D に配置されるため gap = D/n（n>=2で D/(n) ?）
-    # 例: n=1 D=3 -> dt=3, P1@3 ; n=2 D=3 -> dt=1.5, P1@1.5 P2@3
+    # n は Tposeを除いたユーザフレーム数。duration D は P1..Pn の n 点で 0..D とする。
+    # Tposeは呼出側で先頭に追加されるが、Viewerでは1フレーム目から再生されるため
+    # P1@0 とみなす。Frame Time = D/(n-1)（n>=2）、n==1 は D。
     if n == 1:
-        dt = float(duration) / 1 if duration > 1e-9 else 0.0333333
+        dt = float(duration) if duration > 1e-9 else 0.0333333
         if dt < MIN_FRAME_TIME:
             dt = MIN_FRAME_TIME
         return (dt, keyframes_data, 0)
     if n == 2:
-        dt = float(duration) / 2 if duration > 1e-9 else float(duration)
+        dt = float(duration) / 1 if duration > 1e-9 else float(duration)
         if dt < MIN_FRAME_TIME:
             dt = MIN_FRAME_TIME
         return (dt, keyframes_data, 0)

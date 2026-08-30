@@ -424,26 +424,16 @@ class MainWindow(QMainWindow):
         self.timeline_view.set_duration(new_dur)
         items = self.timeline_view.get_items()
         if items:
-            # Tposeを除いた n 点は dt..D に配置。リサイズ時は比率を保持しつつ
-            # 先頭は new_dt, 末尾は new_dur に
-            n = len(items)
-            new_dt = new_dur / n if n > 0 else 0.0
-            old_dt = old_dur / n if n > 0 else 0.0
+            # P1..Pn は 0..D に配置（Tposeは非表示）
             scaled = []
             for idx, (p, t) in enumerate(items):
                 if idx == 0:
-                    scaled.append((p, float(new_dt)))
+                    scaled.append((p, 0.0))
                 elif idx == len(items) - 1:
                     scaled.append((p, new_dur))
                 else:
-                    # 中間は 0..D ではなく dt..D の比率でスケール
                     if old_dur > 1e-9:
-                        # t は old_dt..old_dur の範囲、比率で new_dt..new_dur へ
-                        if old_dur - old_dt > 1e-9:
-                            ratio = (t - old_dt) / (old_dur - old_dt)
-                        else:
-                            ratio = 0.0
-                        nt = new_dt + ratio * (new_dur - new_dt)
+                        nt = t / old_dur * new_dur
                     else:
                         nt = t
                     scaled.append((p, float(nt)))
@@ -521,15 +511,10 @@ class MainWindow(QMainWindow):
             if gaps and max(gaps) - min(gaps) <= 1e-4:
                 is_uniform = True
         if not existing_items or is_uniform:
-            # 均一再配置（リスト順）Tposeを除いた n 点を dt..D に配置
-            # Frame Time = D / n, P1@dt ... Pn@D, Tpose@0 は BVH出力時に付与
-            dt = dur / count if count > 0 else dur
+            # 均一再配置（リスト順）P1@0 .. Pn@D、TposeはBVHで0に前置（非表示）
             new_items: list[tuple[Path, float]] = []
             for i, p in enumerate(list_paths):
-                t = (i + 1) * dt
-                # 最終は D にクランプ
-                if i == count - 1:
-                    t = dur
+                t = (i * dur / (count - 1)) if count > 1 else 0.0
                 new_items.append((p, float(t)))
             self.timeline_view.set_items(new_items)
             self._update_computed_label()
@@ -596,41 +581,35 @@ class MainWindow(QMainWindow):
             return
         if count == 1:
             dur = float(self.spin_duration.value())
-            # 常時Tpose: P1は D に配置、Tposeは0、Frame Time = D/1
-            dt = dur / 1 if count >= 1 else 0.0333333
+            dt = dur if count >= 1 else 0.0333333
             if dt < MIN_FRAME_TIME:
                 dt = MIN_FRAME_TIME
-            # 表示は総フレーム n+1（Tpose含む）
-            self.label_computed.setText(f"Frame Time: {dt:.4f}  総フレーム: 2（Tpose+1）")
+            self.label_computed.setText(f"Frame Time: {dt:.4f}  総フレーム: 2（Tpose+1） P1@0s")
             return
         try:
             items = self.timeline_view.get_items()
             if len(items) != count:
                 self.label_computed.setText("算出: -（同期中）")
                 return
-            # quick compute without parsing files (use dummy data for dt only)
-            # key_times は Tposeを除いた P1..Pn の n 点（dt..D）
+            # key_times は P1..Pn の n 点（0..D）、Tposeは非表示
             key_times = [t for _, t in items]
             dummy = [{} for _ in range(count)]
             from .timeline import compute_timeline_frames
             dt, _, inserted = compute_timeline_frames(float(self.spin_duration.value()), dummy, key_times)
             # Tposeを除いた n 点での dt/inserted、総フレームは Tpose+1 を加算
-            # 均一時 total_user = n, 非均一 total_user = n+inserted (=F)
             if count == 2:
                 total_user = 2
-                # dt は D/2 のはず
                 inserted_user = 0
             else:
                 if inserted > 0:
                     import math
                     total_user = int(round(float(self.spin_duration.value()) / dt)) + 1
-                    # 非均一時の dt は min_gap 基準、total_user は F
                     inserted_user = total_user - count
                 else:
                     total_user = count
                     inserted_user = 0
             total = total_user + 1  # Tpose分
-            msg = f"算出 Frame Time: {dt:.4f}  総フレーム: {total}（Tpose+{total_user}）"
+            msg = f"算出 Frame Time: {dt:.4f}  総フレーム: {total}（Tpose+{total_user} P1@0s）"
             if inserted_user > 0:
                 msg += f"（+{inserted_user}補間）"
             if dt < MIN_FRAME_TIME + 1e-9:
