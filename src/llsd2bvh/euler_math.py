@@ -55,10 +55,28 @@ _HEAD_FIX_JOINTS = {
     "mPelvis",
 }
 
+# Hand/Finger Fix: 左手中指 単軸検証より
+# Up/Down(前後,ねじれなし)=VX, Left/Right(左右)=VZ, Roll(ねじれ)=VY
+# 現行素通し BVH(Z,X,Y)=(VZ,VX,VY) では VX->X(Roll), VZ->Z(Up/Down), VY->Y(Left/Right) と循環ズレ
+# 正: BVH(Z,X,Y)=(VX,VY,VZ) で Up/Down->Up/Down, Left/Right->Left/Right, Roll->Roll に一致
+# 腕/脚と同様 左右対称で同置換（符号反転なし）
+_HAND_FIX_JOINTS = {
+    "mHandThumb1Left", "mHandThumb2Left", "mHandThumb3Left",
+    "mHandIndex1Left", "mHandIndex2Left", "mHandIndex3Left",
+    "mHandMiddle1Left", "mHandMiddle2Left", "mHandMiddle3Left",
+    "mHandRing1Left", "mHandRing2Left", "mHandRing3Left",
+    "mHandPinky1Left", "mHandPinky2Left", "mHandPinky3Left",
+    "mHandThumb1Right", "mHandThumb2Right", "mHandThumb3Right",
+    "mHandIndex1Right", "mHandIndex2Right", "mHandIndex3Right",
+    "mHandMiddle1Right", "mHandMiddle2Right", "mHandMiddle3Right",
+    "mHandRing1Right", "mHandRing2Right", "mHandRing3Right",
+    "mHandPinky1Right", "mHandPinky2Right", "mHandPinky3Right",
+}
+
 
 def llsd_to_bvh_deg(joint: str, rotation_rad: Tuple[float, float, float], order: str = "ZXY") -> Tuple[float, ...]:
-    """jointを考慮したLLSD→BVH deg変換。Headのみ逆巡回を適用。"""
-    if joint in _HEAD_FIX_JOINTS:
+    """jointを考慮したLLSD→BVH deg変換。Head/Handは循環 BVH(Z,X,Y)=(VX,VY,VZ) を適用。"""
+    if joint in _HEAD_FIX_JOINTS or joint in _HAND_FIX_JOINTS:
         dx = rad_to_deg(rotation_rad[0])
         dy = rad_to_deg(rotation_rad[1])
         dz = rad_to_deg(rotation_rad[2])
