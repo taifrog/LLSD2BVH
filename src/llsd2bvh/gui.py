@@ -17,7 +17,7 @@ try:
         QComboBox, QDoubleSpinBox, QCheckBox, QFileDialog, QMessageBox,
         QProgressBar, QTextEdit
     )
-    from PySide6.QtCore import Qt, QMimeData, QUrl
+    from PySide6.QtCore import Qt, QMimeData, QUrl, QSettings
 except ImportError as e:
     print("PySide6 is required for GUI: pip install PySide6", file=sys.stderr)
     raise
@@ -27,6 +27,7 @@ from .skeleton import load_skeleton, filter_skeleton
 from .bvh_writer import write_bvh_frames
 from .timeline import compute_timeline_frames, MIN_FRAME_TIME, MAX_DURATION
 from .widgets.timeline_view import TimelineView
+from .i18n import tr, DEFAULT
 
 
 MAX_FILES = 20
@@ -72,9 +73,16 @@ class FileListWidget(QListWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("LLSD → BVH 変換 (GUI)")
+        self.settings = QSettings("TAIFROG", "LLSD2BVH")
+        lang = self.settings.value("lang", DEFAULT)
+        if lang not in ("ja", "en"):
+            lang = DEFAULT
+        self.lang = lang
+        self.setWindowTitle(tr("window_title", self.lang))
         self.resize(860, 760)
         self._build_ui()
+        self._update_lang_buttons()
+        self.retranslateUi()
         self._update_timeline_state()
 
     def _build_ui(self):
@@ -82,42 +90,59 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
+        # Language switch (2 buttons)
+        lang_row = QHBoxLayout()
+        self.lbl_lang = QLabel()
+        lang_row.addWidget(self.lbl_lang)
+        self.btn_ja = QPushButton("日本語")
+        self.btn_ja.setCheckable(True)
+        self.btn_en = QPushButton("English")
+        self.btn_en.setCheckable(True)
+        self.btn_ja.clicked.connect(lambda: self.set_language("ja"))
+        self.btn_en.clicked.connect(lambda: self.set_language("en"))
+        lang_row.addWidget(self.btn_ja)
+        lang_row.addWidget(self.btn_en)
+        lang_row.addStretch()
+        layout.addLayout(lang_row)
+
         # Input list
-        layout.addWidget(QLabel("入力LLSDファイル（最大20件、ドラッグ＆ドロップ可）:"))
+        self.lbl_input = QLabel()
+        layout.addWidget(self.lbl_input)
         self.list_widget = FileListWidget()
         layout.addWidget(self.list_widget, stretch=2)
 
         btn_row = QHBoxLayout()
-        self.btn_add = QPushButton("追加…")
-        self.btn_remove = QPushButton("削除")
-        self.btn_copy = QPushButton("コピー")
-        self.btn_copy.setToolTip("選択中の1件を複製して直後に挿入（最大20件）")
+        self.btn_add = QPushButton()
+        self.btn_remove = QPushButton()
+        self.btn_copy = QPushButton()
         self.btn_copy.setEnabled(False)
         self.btn_up = QPushButton("↑")
         self.btn_down = QPushButton("↓")
-        self.btn_clear = QPushButton("クリア")
+        self.btn_clear = QPushButton()
         for b in [self.btn_add, self.btn_remove, self.btn_copy, self.btn_up, self.btn_down, self.btn_clear]:
             btn_row.addWidget(b)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
         # Timeline
-        layout.addWidget(QLabel("タイムライン（1件は無効、2件以上で有効。ドラッグで移動、ダブルクリックで時刻入力。先頭0s/末尾は固定）:"))
+        self.lbl_timeline = QLabel()
+        layout.addWidget(self.lbl_timeline)
         self.timeline_view = TimelineView()
         layout.addWidget(self.timeline_view)
         # duration row
         dur_row = QHBoxLayout()
-        dur_row.addWidget(QLabel("アニメーション時間:"))
+        self.lbl_anim = QLabel()
+        dur_row.addWidget(self.lbl_anim)
         self.spin_duration = QDoubleSpinBox()
         self.spin_duration.setDecimals(2)
         self.spin_duration.setSingleStep(0.5)
         self.spin_duration.setRange(0.1, MAX_DURATION)
         self.spin_duration.setValue(5.0)
-        self.spin_duration.setSuffix(" 秒")
         dur_row.addWidget(self.spin_duration)
-        dur_row.addWidget(QLabel(f"（最大{int(MAX_DURATION)}秒）"))
+        self.lbl_max = QLabel()
+        dur_row.addWidget(self.lbl_max)
         dur_row.addSpacing(12)
-        self.label_computed = QLabel("算出: -")
+        self.label_computed = QLabel()
         self.label_computed.setStyleSheet("color: #333; font-weight: bold;")
         dur_row.addWidget(self.label_computed)
         dur_row.addStretch()
@@ -125,34 +150,34 @@ class MainWindow(QMainWindow):
 
         # Output
         out_row = QHBoxLayout()
-        out_row.addWidget(QLabel("出力BVH:"))
+        self.lbl_output = QLabel()
+        out_row.addWidget(self.lbl_output)
         self.edit_output = QLineEdit()
-        self.edit_output.setPlaceholderText("未指定なら入力先頭と同名.bvh（複数時は連結1ファイル）")
-        self.btn_browse_out = QPushButton("参照…")
+        self.btn_browse_out = QPushButton()
         out_row.addWidget(self.edit_output, stretch=1)
         out_row.addWidget(self.btn_browse_out)
         layout.addLayout(out_row)
 
         # Options grid
         opt_row1 = QHBoxLayout()
-        opt_row1.addWidget(QLabel("Skeleton:"))
+        self.lbl_skeleton = QLabel()
+        opt_row1.addWidget(self.lbl_skeleton)
         self.edit_skeleton = QLineEdit()
-        self.edit_skeleton.setPlaceholderText("未指定なら同梱 avatar_skeleton.xml")
-        self.btn_browse_skel = QPushButton("参照…")
+        self.btn_browse_skel = QPushButton()
         opt_row1.addWidget(self.edit_skeleton, stretch=1)
         opt_row1.addWidget(self.btn_browse_skel)
         layout.addLayout(opt_row1)
 
         opt_row2 = QHBoxLayout()
-        opt_row2.addWidget(QLabel("Units:"))
+        self.lbl_units = QLabel()
+        opt_row2.addWidget(self.lbl_units)
         self.combo_units = QComboBox()
-        self.combo_units.addItems(["自動", "meter", "inch"])
         opt_row2.addWidget(self.combo_units)
-        opt_row2.addWidget(QLabel("SL互換:"))
+        self.lbl_sl = QLabel()
+        opt_row2.addWidget(self.lbl_sl)
         self.combo_sl = QComboBox()
-        self.combo_sl.addItems(["自動", "2フレーム", "1フレーム"])
         opt_row2.addWidget(self.combo_sl)
-        self._label_frame = QLabel("Frame Time:")
+        self._label_frame = QLabel()
         self._label_frame.setVisible(False)
         self.spin_frame = QDoubleSpinBox()
         self.spin_frame.setDecimals(7)
@@ -160,7 +185,7 @@ class MainWindow(QMainWindow):
         self.spin_frame.setRange(0.001, 1.0)
         self.spin_frame.setValue(0.0333333)
         self.spin_frame.setVisible(False)
-        self._label_frame_suffix = QLabel("(固定値 0.0333)")
+        self._label_frame_suffix = QLabel()
         self._label_frame_suffix.setVisible(False)
         opt_row2.addWidget(self._label_frame)
         opt_row2.addWidget(self.spin_frame)
@@ -169,7 +194,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(opt_row2)
 
         opt_row3 = QHBoxLayout()
-        self.chk_no_hands = QCheckBox("手を除外")
+        self.chk_no_hands = QCheckBox()
         self.chk_no_hands.setChecked(True)
         opt_row3.addWidget(self.chk_no_hands)
         opt_row3.addStretch()
@@ -187,9 +212,9 @@ class MainWindow(QMainWindow):
         # Convert / Close
         bottom = QHBoxLayout()
         bottom.addStretch()
-        self.btn_convert = QPushButton("変換")
+        self.btn_convert = QPushButton()
         self.btn_convert.setDefault(True)
-        self.btn_close = QPushButton("閉じる")
+        self.btn_close = QPushButton()
         bottom.addWidget(self.btn_convert)
         bottom.addWidget(self.btn_close)
         layout.addLayout(bottom)
@@ -214,6 +239,62 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def set_language(self, lang: str):
+        if lang not in ("ja", "en"):
+            return
+        self.lang = lang
+        self.settings.setValue("lang", lang)
+        self._update_lang_buttons()
+        self.retranslateUi()
+        self._update_computed_label()
+
+    def _update_lang_buttons(self):
+        is_ja = self.lang == "ja"
+        self.btn_ja.setChecked(is_ja)
+        self.btn_en.setChecked(not is_ja)
+        # visually disable current
+        self.btn_ja.setEnabled(not is_ja)
+        self.btn_en.setEnabled(is_ja)
+
+    def retranslateUi(self):
+        self.setWindowTitle(tr("window_title", self.lang))
+        self.lbl_lang.setText(tr("lang_label", self.lang))
+        self.btn_ja.setText(tr("btn_ja", self.lang))
+        self.btn_en.setText(tr("btn_en", self.lang))
+        self.lbl_input.setText(tr("input_label", self.lang))
+        self.lbl_timeline.setText(tr("timeline_label", self.lang))
+        self.lbl_anim.setText(tr("anim_time", self.lang))
+        self.spin_duration.setSuffix(tr("sec_suffix", self.lang))
+        self.lbl_max.setText(tr("max_sec", self.lang, max=int(MAX_DURATION)))
+        self.lbl_output.setText(tr("output_label", self.lang))
+        self.edit_output.setPlaceholderText(tr("output_placeholder", self.lang))
+        self.btn_browse_out.setText(tr("btn_browse", self.lang))
+        self.lbl_skeleton.setText(tr("skeleton_label", self.lang))
+        self.edit_skeleton.setPlaceholderText(tr("skeleton_placeholder", self.lang))
+        self.btn_browse_skel.setText(tr("btn_browse", self.lang))
+        self.lbl_units.setText(tr("units_label", self.lang))
+        self.lbl_sl.setText(tr("sl_label", self.lang))
+        self._label_frame.setText(tr("label_frame", self.lang))
+        self._label_frame_suffix.setText(tr("label_frame_suffix", self.lang))
+        # combos: preserve index
+        u_idx = self.combo_units.currentIndex()
+        self.combo_units.clear()
+        self.combo_units.addItems([tr("units_auto", self.lang), tr("units_meter", self.lang), tr("units_inch", self.lang)])
+        self.combo_units.setCurrentIndex(u_idx if 0 <= u_idx < 3 else 0)
+        s_idx = self.combo_sl.currentIndex()
+        self.combo_sl.clear()
+        self.combo_sl.addItems([tr("sl_auto", self.lang), tr("sl_2frames", self.lang), tr("sl_1frame", self.lang)])
+        self.combo_sl.setCurrentIndex(s_idx if 0 <= s_idx < 3 else 0)
+        self.chk_no_hands.setText(tr("exclude_hands", self.lang))
+        self.btn_add.setText(tr("btn_add", self.lang))
+        self.btn_remove.setText(tr("btn_remove", self.lang))
+        self.btn_copy.setText(tr("btn_copy", self.lang))
+        self.btn_copy.setToolTip(tr("btn_copy_tip", self.lang))
+        self.btn_clear.setText(tr("btn_clear", self.lang))
+        self.btn_convert.setText(tr("btn_convert", self.lang))
+        self.btn_close.setText(tr("btn_close", self.lang))
+        self.label_computed.setStyleSheet("color: #333; font-weight: bold;")
+
     # helpers
     def log_msg(self, msg: str):
         self.log.append(msg)
@@ -225,10 +306,10 @@ class MainWindow(QMainWindow):
     def on_copy(self):
         sel = self.list_widget.selectedItems()
         if len(sel) != 1:
-            QMessageBox.warning(self, "コピー", "コピーは1件選択時のみ可能です。")
+            QMessageBox.warning(self, tr("msg_copy_title", self.lang), tr("msg_copy_warn", self.lang))
             return
         if self.list_widget.count() >= MAX_FILES:
-            QMessageBox.warning(self, "上限", f"最大{MAX_FILES}件までです。")
+            QMessageBox.warning(self, tr("msg_limit_title", self.lang), tr("msg_limit_body", self.lang, max=MAX_FILES))
             return
         src_item = sel[0]
         src_row = self.list_widget.row(src_item)
@@ -577,26 +658,24 @@ class MainWindow(QMainWindow):
     def _update_computed_label(self):
         count = self.list_widget.count()
         if count == 0:
-            self.label_computed.setText("算出: -")
+            self.label_computed.setText(tr("computed_none", self.lang))
             return
         if count == 1:
             dur = float(self.spin_duration.value())
             dt = dur if count >= 1 else 0.0333333
             if dt < MIN_FRAME_TIME:
                 dt = MIN_FRAME_TIME
-            self.label_computed.setText(f"Frame Time: {dt:.4f}  総フレーム: 2（Tpose+1） P1@0s")
+            self.label_computed.setText(tr("computed_single", self.lang, dt=dt))
             return
         try:
             items = self.timeline_view.get_items()
             if len(items) != count:
-                self.label_computed.setText("算出: -（同期中）")
+                self.label_computed.setText(tr("computed_sync", self.lang))
                 return
-            # key_times は P1..Pn の n 点（0..D）、Tposeは非表示
             key_times = [t for _, t in items]
             dummy = [{} for _ in range(count)]
             from .timeline import compute_timeline_frames
             dt, _, inserted = compute_timeline_frames(float(self.spin_duration.value()), dummy, key_times)
-            # Tposeを除いた n 点での dt/inserted、総フレームは Tpose+1 を加算
             if count == 2:
                 total_user = 2
                 inserted_user = 0
@@ -608,15 +687,15 @@ class MainWindow(QMainWindow):
                 else:
                     total_user = count
                     inserted_user = 0
-            total = total_user + 1  # Tpose分
-            msg = f"算出 Frame Time: {dt:.4f}  総フレーム: {total}（Tpose+{total_user} P1@0s）"
+            total = total_user + 1
+            msg = tr("computed_multi", self.lang, dt=dt, total=total, user=total_user)
             if inserted_user > 0:
-                msg += f"（+{inserted_user}補間）"
+                msg += tr("computed_interp", self.lang, n=inserted_user)
             if dt < MIN_FRAME_TIME + 1e-9:
-                msg += "  ※最小0.01でクランプ"
+                msg += tr("computed_clamp", self.lang)
             self.label_computed.setText(msg)
         except Exception as e:
-            self.label_computed.setText(f"算出エラー: {e}")
+            self.label_computed.setText(tr("computed_error", self.lang, e=e))
 
     def add_files(self, files):
         # existing full paths set
@@ -628,7 +707,7 @@ class MainWindow(QMainWindow):
             if str(Path(f)) in existing_full or full in existing_full:
                 continue
             if self.list_widget.count() >= MAX_FILES:
-                QMessageBox.warning(self, "上限", f"最大{MAX_FILES}件までです。")
+                QMessageBox.warning(self, tr("msg_limit_title", self.lang), tr("msg_limit_body", self.lang, max=MAX_FILES))
                 break
             item = QListWidgetItem()
             # store full path in UserRole, display will be numbered later
@@ -645,7 +724,7 @@ class MainWindow(QMainWindow):
             self._update_timeline_state()
 
     def on_add(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "LLSD XMLを選択", "", "LLSD XML (*.xml);;All (*.*)")
+        files, _ = QFileDialog.getOpenFileNames(self, tr("dialog_select_llsd", self.lang), "", tr("filter_llsd", self.lang))
         if files:
             self.add_files(files)
 
@@ -720,28 +799,28 @@ class MainWindow(QMainWindow):
         self._update_computed_label()
 
     def on_browse_out(self):
-        path, _ = QFileDialog.getSaveFileName(self, "出力BVH", "", "BVH (*.bvh)")
+        path, _ = QFileDialog.getSaveFileName(self, tr("dialog_output_bvh", self.lang), "", tr("filter_bvh", self.lang))
         if path:
             self.edit_output.setText(path)
 
     def on_browse_skel(self):
-        path, _ = QFileDialog.getOpenFileName(self, "avatar_skeleton.xml", "", "XML (*.xml)")
+        path, _ = QFileDialog.getOpenFileName(self, tr("dialog_skeleton", self.lang), "", tr("filter_xml", self.lang))
         if path:
             self.edit_skeleton.setText(path)
 
     def on_convert(self):
         count = self.list_widget.count()
         if count == 0:
-            QMessageBox.warning(self, "エラー", "入力ファイルがありません。")
+            QMessageBox.warning(self, tr("msg_error_title", self.lang), tr("msg_no_input", self.lang))
             return
         if count > MAX_FILES:
-            QMessageBox.warning(self, "エラー", f"入力は最大{MAX_FILES}件までです。")
+            QMessageBox.warning(self, tr("msg_error_title", self.lang), tr("msg_limit_body", self.lang, max=MAX_FILES))
             return
         # validate exists for all list items
         all_inputs = self._get_full_paths()
         missing = [str(p) for p in all_inputs if not p.exists()]
         if missing:
-            QMessageBox.warning(self, "エラー", "存在しないファイル:\n" + "\n".join(missing))
+            QMessageBox.warning(self, tr("msg_error_title", self.lang), tr("msg_missing", self.lang, files="\n".join(missing)))
             return
         out_text = self.edit_output.text().strip()
         # out_path決定は後で（timeline順の先頭を使うため）
@@ -773,12 +852,15 @@ class MainWindow(QMainWindow):
                     skel_path = c
                     break
             if skel_path is None:
-                QMessageBox.warning(self, "エラー", "avatar_skeleton.xml が見つかりません。--skeleton で指定するか、exeと同じフォルダに配置してください。")
+                QMessageBox.warning(self, tr("msg_error_title", self.lang), tr("msg_skeleton_not_found", self.lang))
                 return
-        units_map = {"自動": None, "meter": "meter", "inch": "inch"}
-        units = units_map[self.combo_units.currentText()]
-        sl_map = {"自動": None, "2フレーム": True, "1フレーム": False}
-        sl_compat = sl_map[self.combo_sl.currentText()]
+        # currentText may be ja or en, map by index instead for robustness
+        _units_idx = self.combo_units.currentIndex()
+        _units_vals = [None, "meter", "inch"]
+        units = _units_vals[_units_idx] if 0 <= _units_idx < 3 else None
+        _sl_idx = self.combo_sl.currentIndex()
+        _sl_vals = [None, True, False]
+        sl_compat = _sl_vals[_sl_idx] if 0 <= _sl_idx < 3 else None
         include_face = False
         include_tail = False
         include_hands = not self.chk_no_hands.isChecked()
@@ -789,7 +871,7 @@ class MainWindow(QMainWindow):
         if use_timeline:
             timeline_items = self.timeline_view.get_items()  # リスト順、P1..Pn は dt..D
             if len(timeline_items) != count:
-                QMessageBox.warning(self, "エラー", "タイムラインと入力リストが不一致です。ファイルを再追加してください。")
+                QMessageBox.warning(self, tr("msg_error_title", self.lang), tr("msg_timeline_mismatch", self.lang))
                 return
             duration = float(self.spin_duration.value())
             inputs = [p for p, _ in timeline_items]
@@ -803,41 +885,32 @@ class MainWindow(QMainWindow):
             self.progress.setVisible(True)
             self.progress.setMaximum(count + 2)
             self.progress.setValue(0)
-            self.log_msg(f"変換開始(タイムライン): {count}件, duration={duration}s → {out_path}")
+            self.log_msg(tr("log_start_timeline", self.lang, n=count, d=duration, p=str(out_path)))
             try:
                 bones = load_skeleton(skel_path)
                 bones = filter_skeleton(bones, include_face=include_face, include_tail=include_tail, include_hands=include_hands)
                 keyframes_data: list[dict] = []
                 for idx, inp in enumerate(inputs):
-                    self.log_msg(f"  [{idx+1}/{count}] {inp.name} 解析中... t={key_times[idx]:.2f}s")
+                    self.log_msg(tr("log_parsing_t", self.lang, i=idx+1, n=count, name=inp.name, t=key_times[idx]))
                     QApplication.processEvents()
                     data = parse_llsd_xml(inp)
                     keyframes_data.append(data)
                     self.progress.setValue(idx + 1)
-                # Tposeを除いた n 点で Frame Time を算出
-                # 非均一時は全体で1つの Frame Time で必要な追加フレームを補間
                 frame_time, frames_user, inserted = compute_timeline_frames(duration, keyframes_data, key_times)
                 if frame_time < MIN_FRAME_TIME:
                     frame_time = MIN_FRAME_TIME
-                # Frame Time は D / n が基本だが、非均一時の compute が min_gap から算出した dt を優先
-                # 均一時（inserted==0）は D/n と一致するはず
-                # 総フレームは Tpose + frames_user
                 tpose_frame: dict = {}
                 frames = [tpose_frame] + frames_user
-                # Frame Time は compute の dt をそのまま使用（Tposeを含めた n+1 フレームで duration をカバー）
-                # ただし n 点が dt..D に配置されているため、Tpose(0) から P1(dt) の gap も dt で均一
-                # そのため total duration = len(frames)-1 * frame_time = D となる
-                self.log_msg(f"  タイムライン解析: duration={duration}s, dt={frame_time:.5f}, ユーザフレーム={len(frames_user)} (補間+{inserted}) 総フレーム={len(frames)}（Tpose+{len(frames_user)}）")
-                self.log_msg(f"HIERARCHY 構築: {len(bones)} bones")
-                # Tposeは呼出側で付与済みのため sl_compat は False で二重挿入を避ける
+                self.log_msg(tr("log_timeline_info", self.lang, d=duration, dt=frame_time, uf=len(frames_user), ins=inserted, tf=len(frames)))
+                self.log_msg(tr("log_hierarchy", self.lang, n=len(bones)))
                 write_bvh_frames(frames, bones, out_path, frame_time=frame_time, units=units, sl_compat=False, include_face=include_face, include_tail=include_tail)
-                self.log_msg(f"書き出し完了: {out_path} ({len(frames)}フレーム, dt={frame_time:.5f})")
-                QMessageBox.information(self, "完了", f"変換が完了しました:\n{out_path}\n{len(frames)}フレーム (dt={frame_time:.5f}, 補間+{inserted}, Tpose含む)")
+                self.log_msg(tr("log_done", self.lang, p=str(out_path), frames=len(frames), dt=frame_time))
+                QMessageBox.information(self, tr("msg_done_title", self.lang), tr("msg_done_body", self.lang, path=str(out_path), frames=len(frames), dt=frame_time, interp=inserted))
             except Exception as e:
                 import traceback
                 traceback.print_exc()
-                self.log_msg(f"エラー: {e}")
-                QMessageBox.critical(self, "エラー", f"変換に失敗しました:\n{e}")
+                self.log_msg(tr("log_error", self.lang, e=e))
+                QMessageBox.critical(self, tr("msg_error_title", self.lang), tr("msg_failed", self.lang, e=e))
             finally:
                 self.progress.setVisible(False)
             return
@@ -855,28 +928,28 @@ class MainWindow(QMainWindow):
             self.progress.setVisible(True)
             self.progress.setMaximum(count + 1)
             self.progress.setValue(0)
-            self.log_msg(f"変換開始: {count}件 duration={duration}s → {out_path} (Tpose+1)")
+            self.log_msg(tr("log_start_single", self.lang, n=count, d=duration, p=str(out_path)))
             try:
                 bones = load_skeleton(skel_path)
                 bones = filter_skeleton(bones, include_face=include_face, include_tail=include_tail, include_hands=include_hands)
                 frames = []
                 for idx, inp in enumerate(inputs):
-                    self.log_msg(f"  [{idx+1}/{count}] {inp.name} 解析中...")
+                    self.log_msg(tr("log_parsing", self.lang, i=idx+1, n=count, name=inp.name))
                     QApplication.processEvents()
                     data = parse_llsd_xml(inp)
                     frames.append(data)
                     self.progress.setValue(idx + 1)
                 tpose_frame: dict = {}
                 frames = [tpose_frame] + frames
-                self.log_msg(f"HIERARCHY 構築: {len(bones)} bones")
+                self.log_msg(tr("log_hierarchy", self.lang, n=len(bones)))
                 write_bvh_frames(frames, bones, out_path, frame_time=frame_time, units=units, sl_compat=False, include_face=include_face, include_tail=include_tail)
-                self.log_msg(f"書き出し完了: {out_path} ({len(frames)}フレーム, dt={frame_time:.5f}, Tpose含む)")
-                QMessageBox.information(self, "完了", f"変換が完了しました:\n{out_path}\n{len(frames)}フレーム (Tpose含む)")
+                self.log_msg(tr("log_done_single", self.lang, p=str(out_path), frames=len(frames), dt=frame_time))
+                QMessageBox.information(self, tr("msg_done_title", self.lang), tr("msg_done_body_single", self.lang, path=str(out_path), frames=len(frames)))
             except Exception as e:
                 import traceback
                 traceback.print_exc()
-                self.log_msg(f"エラー: {e}")
-                QMessageBox.critical(self, "エラー", f"変換に失敗しました:\n{e}")
+                self.log_msg(tr("log_error", self.lang, e=e))
+                QMessageBox.critical(self, tr("msg_error_title", self.lang), tr("msg_failed", self.lang, e=e))
             finally:
                 self.progress.setVisible(False)
 

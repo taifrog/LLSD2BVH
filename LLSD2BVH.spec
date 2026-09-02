@@ -7,7 +7,7 @@ binaries = []
 hiddenimports = [
     'PySide6.QtXml',
     'llsd2bvh.llsd_parser', 'llsd2bvh.skeleton', 'llsd2bvh.bvh_writer', 'llsd2bvh.euler_math',
-    'llsd2bvh.timeline', 'llsd2bvh.widgets.timeline_view',
+    'llsd2bvh.timeline', 'llsd2bvh.widgets.timeline_view', 'llsd2bvh.i18n',
 ]
 
 a = Analysis(
