@@ -21,6 +21,11 @@ PIN_W = 10
 PIN_H = 7
 GAP_X = 6  # 重なり判定の余白
 
+# Zoom: 100%〜400%、±50%刻み
+ZOOM_MIN = 1.0
+ZOOM_MAX = 4.0
+ZOOM_STEP = 0.5
+
 _BG = QColor(245, 245, 245)
 _LINE = QColor(180, 180, 180)
 _TICK = QColor(150, 150, 150)
@@ -32,6 +37,8 @@ _BLOCK_BORDER = QColor(40, 90, 170)
 
 class TimelineView(QWidget):
     timeChanged = Signal()
+    zoomChanged = Signal(float)
+    zoomRequest = Signal(int)  # +1 zoomIn / -1 zoomOut via wheel
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -45,7 +52,11 @@ class TimelineView(QWidget):
         self._drag_idx: int | None = None
         self._drag_offset = 0
         self._hover_idx: int | None = None
-        self.setToolTip("ドラッグで時刻を移動、ダブルクリックで数値入力（先頭0s/末尾durationは固定）")
+        self._zoom = 1.0
+        self._panning = False
+        self._pan_start_x = 0
+        self._pan_start_scroll = 0
+        self.setToolTip("ドラッグで時刻を移動、ダブルクリックで数値入力（先頭0s/末尾durationは固定）／空所をドラッグで左右スクロール／ホイールで拡大縮小")
 
     def set_duration(self, v: float):
         self._duration = max(0.1, min(60.0, v))
@@ -53,6 +64,31 @@ class TimelineView(QWidget):
 
     def duration(self) -> float:
         return self._duration
+
+    # --- zoom API (100%..400% ±50%) ---
+    def zoom(self) -> float:
+        return self._zoom
+
+    def setZoom(self, v: float) -> bool:
+        nv = max(ZOOM_MIN, min(ZOOM_MAX, float(v)))
+        # 0.5刻みにスナップ（浮動誤差対策）
+        nv = round(nv * 2) / 2.0
+        nv = max(ZOOM_MIN, min(ZOOM_MAX, nv))
+        if abs(nv - self._zoom) < 1e-9:
+            return False
+        self._zoom = nv
+        self.zoomChanged.emit(self._zoom)
+        self.update()
+        return True
+
+    def zoomIn(self) -> bool:
+        return self.setZoom(self._zoom + ZOOM_STEP)
+
+    def zoomOut(self) -> bool:
+        return self.setZoom(self._zoom - ZOOM_STEP)
+
+    def resetZoom(self) -> bool:
+        return self.setZoom(1.0)
 
     def set_items(self, items: List[Tuple[Path, float]]):
         self._items = list(items)
@@ -306,6 +342,48 @@ class TimelineView(QWidget):
                 painter.setFont(small)
                 painter.drawText(rect_x + 4, rect_y + BLOCK_H - 4, "固定")
 
+    def _get_scroll_area(self):
+        p = self.parent()
+        while p is not None:
+            try:
+                from PySide6.QtWidgets import QScrollArea
+                if isinstance(p, QScrollArea):
+                    return p
+            except Exception:
+                pass
+            p = p.parent() if hasattr(p, "parent") else None
+        return None
+
+    def _auto_scroll_for_drag(self, widget_pos):
+        sa = self._get_scroll_area()
+        if sa is None:
+            return
+        try:
+            vp_pos = self.mapTo(sa.viewport(), widget_pos)
+            vw = sa.viewport().width()
+            margin = 30
+            step = 18
+            hs = sa.horizontalScrollBar()
+            if vp_pos.x() < margin:
+                hs.setValue(max(hs.minimum(), hs.value() - step))
+            elif vp_pos.x() > vw - margin:
+                hs.setValue(min(hs.maximum(), hs.value() + step))
+        except Exception:
+            pass
+
+    def wheelEvent(self, event):
+        # ホイールは常にズーム（Ctrl不要、横スクロールはドラッグで代替）
+        delta = event.angleDelta().y()
+        # 横ホイールが来た場合も縦に読み替え
+        if delta == 0:
+            delta = event.angleDelta().x()
+        if delta > 0:
+            self.zoomRequest.emit(1)
+        elif delta < 0:
+            self.zoomRequest.emit(-1)
+        event.accept()
+        return
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             idx = self._hit_test(event.pos())
@@ -318,8 +396,35 @@ class TimelineView(QWidget):
                 x = self._time_to_x(t, w)
                 self._drag_offset = event.pos().x() - x
                 self.setCursor(Qt.ClosedHandCursor)
+                return
+            # 空所 左ドラッグで横パン開始（スクロールバー左右移動）
+            sa = self._get_scroll_area()
+            if sa is not None and sa.horizontalScrollBar().maximum() > 0:
+                self._panning = True
+                # global Xで追従（widgetがスクロールしてもズレない）
+                try:
+                    self._pan_start_x = int(event.globalPosition().x())
+                except AttributeError:
+                    self._pan_start_x = int(event.globalPos().x())
+                self._pan_start_scroll = sa.horizontalScrollBar().value()
+                self.setCursor(Qt.ClosedHandCursor)
+                event.accept()
+                return
 
     def mouseMoveEvent(self, event):
+        # パン中は最優先（1:1追従、加速なし）
+        if self._panning and event.buttons() & Qt.LeftButton:
+            try:
+                cur_x = int(event.globalPosition().x())
+            except AttributeError:
+                cur_x = int(event.globalPos().x())
+            dx = self._pan_start_x - cur_x
+            sa = self._get_scroll_area()
+            if sa is not None:
+                hs = sa.horizontalScrollBar()
+                hs.setValue(max(hs.minimum(), min(hs.maximum(), self._pan_start_scroll + dx)))
+            event.accept()
+            return
         w = self.width()
         h_idx = self._hit_test(event.pos())
         if h_idx != self._hover_idx:
@@ -342,6 +447,7 @@ class TimelineView(QWidget):
             self._items[self._drag_idx] = (p, float(new_t))
             self.timeChanged.emit()
             self.update()
+            self._auto_scroll_for_drag(event.pos())
         else:
             if self._drag_idx is None and h_idx is not None:
                 if len(self.get_items()) >= 2 and (h_idx == 0 or h_idx == len(self.get_items()) - 1):
@@ -349,9 +455,22 @@ class TimelineView(QWidget):
                 else:
                     self.setCursor(Qt.OpenHandCursor)
             elif self._drag_idx is None:
-                self.setCursor(Qt.ArrowCursor)
+                if self._panning:
+                    self.setCursor(Qt.ClosedHandCursor)
+                else:
+                    # 空所はパン可能を示す（スクロール可能な時のみ）
+                    sa = self._get_scroll_area()
+                    if sa is not None and sa.horizontalScrollBar().maximum() > 0:
+                        self.setCursor(Qt.OpenHandCursor)
+                    else:
+                        self.setCursor(Qt.ArrowCursor)
 
     def mouseReleaseEvent(self, event):
+        if self._panning:
+            self._panning = False
+            self.setCursor(Qt.ArrowCursor)
+            event.accept()
+            return
         if self._drag_idx is not None:
             self._drag_idx = None
             self.setCursor(Qt.ArrowCursor)
@@ -384,3 +503,5 @@ class TimelineView(QWidget):
     def leaveEvent(self, event):
         self._hover_idx = None
         self.update()
+        if not self._panning:
+            self.setCursor(Qt.ArrowCursor)

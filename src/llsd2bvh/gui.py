@@ -15,9 +15,9 @@ try:
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QListWidget, QListWidgetItem, QPushButton, QLabel, QLineEdit,
         QComboBox, QDoubleSpinBox, QCheckBox, QFileDialog, QMessageBox,
-        QProgressBar, QTextEdit
+        QProgressBar, QTextEdit, QScrollArea
     )
-    from PySide6.QtCore import Qt, QMimeData, QUrl, QSettings
+    from PySide6.QtCore import Qt, QMimeData, QUrl, QSettings, QEvent
 except ImportError as e:
     print("PySide6 is required for GUI: pip install PySide6", file=sys.stderr)
     raise
@@ -124,11 +124,43 @@ class MainWindow(QMainWindow):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        # Timeline
+        # Timeline header with zoom controls (- + reset + pct)
+        timeline_header = QHBoxLayout()
         self.lbl_timeline = QLabel()
-        layout.addWidget(self.lbl_timeline)
+        timeline_header.addWidget(self.lbl_timeline, stretch=1)
+        self.btn_zoom_out = QPushButton()
+        self.btn_zoom_out.setFixedWidth(34)
+        self.btn_zoom_in = QPushButton()
+        self.btn_zoom_in.setFixedWidth(34)
+        self.btn_zoom_reset = QPushButton()
+        self.btn_zoom_reset.setFixedWidth(54)
+        self.lbl_zoom_pct = QLabel()
+        self.lbl_zoom_pct.setMinimumWidth(64)
+        self.lbl_zoom_pct.setAlignment(Qt.AlignCenter)
+        self.lbl_zoom_pct.setStyleSheet("color: #555; font-weight: bold;")
+        timeline_header.addWidget(self.btn_zoom_out)
+        timeline_header.addWidget(self.btn_zoom_in)
+        timeline_header.addWidget(self.btn_zoom_reset)
+        timeline_header.addWidget(self.lbl_zoom_pct)
+        layout.addLayout(timeline_header)
+        # Timeline viewport (GUIサイズ固定＋横スクロールで拡大表示)
         self.timeline_view = TimelineView()
-        layout.addWidget(self.timeline_view)
+        self.timeline_scroll = QScrollArea()
+        self.timeline_scroll.setWidgetResizable(False)
+        self.timeline_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.timeline_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.timeline_scroll.setFrameShape(QScrollArea.NoFrame)
+        # 初期幅はviewportに合わせる（zoom=1.0でフィット）
+        self.timeline_scroll.setWidget(self.timeline_view)
+        # 高さはTimelineViewの2段分を収める（110〜150）＋スクロール枠分
+        self.timeline_scroll.setMinimumHeight(132)
+        self.timeline_scroll.setMaximumHeight(164)
+        layout.addWidget(self.timeline_scroll)
+        # ホイールはviewportが先に受けるため、filterでTimelineViewへ中継（Ctrl不要でズーム）
+        try:
+            self.timeline_scroll.viewport().installEventFilter(self)
+        except Exception:
+            pass
         # duration row
         dur_row = QHBoxLayout()
         self.lbl_anim = QLabel()
@@ -233,6 +265,12 @@ class MainWindow(QMainWindow):
         self.spin_duration.valueChanged.connect(self._on_duration_changed)
         self.timeline_view.timeChanged.connect(self._on_timeline_changed)
         self.list_widget.itemSelectionChanged.connect(self._update_copy_button_state)
+        # ズーム操作
+        self.btn_zoom_in.clicked.connect(self._on_zoom_in)
+        self.btn_zoom_out.clicked.connect(self._on_zoom_out)
+        self.btn_zoom_reset.clicked.connect(self._on_zoom_reset)
+        self.timeline_view.zoomChanged.connect(self._on_zoom_changed)
+        self.timeline_view.zoomRequest.connect(self._on_zoom_request)
         # リスト内部ドラッグ並替後も番号を振り直す
         try:
             self.list_widget.model().rowsMoved.connect(self._on_list_reordered)
@@ -294,6 +332,135 @@ class MainWindow(QMainWindow):
         self.btn_convert.setText(tr("btn_convert", self.lang))
         self.btn_close.setText(tr("btn_close", self.lang))
         self.label_computed.setStyleSheet("color: #333; font-weight: bold;")
+        # zoom controls
+        self.btn_zoom_out.setText(tr("zoom_out", self.lang))
+        self.btn_zoom_out.setToolTip(tr("zoom_tip_out", self.lang))
+        self.btn_zoom_in.setText(tr("zoom_in", self.lang))
+        self.btn_zoom_in.setToolTip(tr("zoom_tip_in", self.lang))
+        self.btn_zoom_reset.setText(tr("zoom_reset", self.lang))
+        self.btn_zoom_reset.setToolTip(tr("zoom_tip_reset", self.lang))
+        # wheel hint as tooltip on zoom label
+        self.lbl_zoom_pct.setToolTip(tr("zoom_tip_wheel", self.lang))
+        self._update_zoom_ui()
+
+    # --- zoom helpers (GUIサイズ固定＋中央維持＋自動スクロール) ---
+    def _update_zoom_ui(self):
+        pct = int(round(self.timeline_view.zoom() * 100))
+        try:
+            self.lbl_zoom_pct.setText(tr("zoom_label", self.lang, pct=pct))
+        except Exception:
+            self.lbl_zoom_pct.setText(f"{pct}%")
+        can_out = self.timeline_view.zoom() > 1.0 + 1e-9
+        can_in = self.timeline_view.zoom() < 4.0 - 1e-9
+        self.btn_zoom_out.setEnabled(can_out)
+        self.btn_zoom_in.setEnabled(can_in)
+        self.btn_zoom_reset.setEnabled(abs(self.timeline_view.zoom() - 1.0) > 1e-9)
+
+    def _update_timeline_zoom_width(self):
+        try:
+            vp_w = self.timeline_scroll.viewport().width()
+            if vp_w <= 10:
+                vp_w = max(600, self.timeline_view.width())
+            cur_zoom = self.timeline_view.zoom()
+            new_w = int(vp_w * cur_zoom)
+            if new_w < vp_w:
+                new_w = vp_w
+            self.timeline_view.setMinimumWidth(new_w)
+            self.timeline_view.setMaximumWidth(new_w)
+        except Exception:
+            pass
+
+    def _apply_zoom_with_center(self, new_zoom: float):
+        sa = self.timeline_scroll
+        vp_w = sa.viewport().width()
+        if vp_w <= 10:
+            vp_w = sa.width() - 4
+            if vp_w <= 10:
+                vp_w = 600
+        old_w = self.timeline_view.width()
+        hs = sa.horizontalScrollBar()
+        old_scroll = hs.value()
+        old_center = old_scroll + vp_w / 2.0
+        ratio = old_center / old_w if old_w > 10 else 0.5
+        changed = self.timeline_view.setZoom(new_zoom)
+        if not changed:
+            # still need to ensure width sync (e.g. after resize)
+            self._update_timeline_zoom_width()
+            self._update_zoom_ui()
+            return
+        # widthを更新
+        cur_zoom = self.timeline_view.zoom()
+        new_w = int(vp_w * cur_zoom)
+        if new_w < vp_w:
+            new_w = vp_w
+        self.timeline_view.setMinimumWidth(new_w)
+        self.timeline_view.setMaximumWidth(new_w)
+        # 次フレームでスクロールを中央維持（レイアウト反映待ちでも可視的に揃う）
+        try:
+            # process pending layout
+            QApplication.processEvents()
+            new_center = ratio * new_w
+            new_scroll = int(new_center - vp_w / 2.0)
+            hs.setValue(max(hs.minimum(), min(hs.maximum(), new_scroll)))
+        except Exception:
+            pass
+        self._update_zoom_ui()
+
+    def _on_zoom_in(self):
+        self._apply_zoom_with_center(self.timeline_view.zoom() + 0.5)
+
+    def _on_zoom_out(self):
+        self._apply_zoom_with_center(self.timeline_view.zoom() - 0.5)
+
+    def _on_zoom_reset(self):
+        self._apply_zoom_with_center(1.0)
+
+    def _on_zoom_request(self, direction: int):
+        if direction > 0:
+            self._on_zoom_in()
+        elif direction < 0:
+            self._on_zoom_out()
+
+    def _on_zoom_changed(self, _v: float):
+        # widthは_applyで更新済みだが、wheel等で直接setZoomされた場合の同期
+        self._update_timeline_zoom_width()
+        self._update_zoom_ui()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # 初回表示時にviewport幅に合わせて幅を確定（100%）
+        try:
+            # delay to after layout
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, self._update_timeline_zoom_width)
+            QTimer.singleShot(0, self._update_zoom_ui)
+        except Exception:
+            pass
+
+    def eventFilter(self, obj, event):
+        # viewportのホイールは常にズームとして横取り（QScrollAreaが先に消費する対策）
+        try:
+            if obj is self.timeline_scroll.viewport() and event.type() == QEvent.Wheel:
+                delta = event.angleDelta().y()
+                if delta == 0:
+                    delta = event.angleDelta().x()
+                if delta > 0:
+                    self._on_zoom_in()
+                elif delta < 0:
+                    self._on_zoom_out()
+                return True
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # GUIサイズ固定要件: windowはリサイズされてもtimelineのみ伸縮、zoom倍率維持
+        try:
+            self._update_timeline_zoom_width()
+            # 中央維持はresize時は左端寄せでOK（現行維持）
+        except Exception:
+            pass
 
     # helpers
     def log_msg(self, msg: str):
