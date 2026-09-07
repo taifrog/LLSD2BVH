@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llsd2bvh"
-version = "0.2.0"
+version = "0.3.0"
 description = "Firestorm Poser LLSD XML to BVH converter"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -13,6 +13,7 @@ dependencies = ["PySide6"]
 [project.scripts]
 llsd2bvh = "llsd2bvh.cli:main"
 llsd2bvh-gui = "llsd2bvh.gui:main"
+bvh-viewer = "llsd2bvh.viewer.viewer_window:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llsd2bvh"]
