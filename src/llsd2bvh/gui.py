@@ -28,6 +28,12 @@ from .bvh_writer import write_bvh_frames
 from .timeline import compute_timeline_frames, MIN_FRAME_TIME, MAX_DURATION
 from .widgets.timeline_view import TimelineView
 from .i18n import tr, DEFAULT
+try:
+    from .viewer.viewer_window import BvhViewerWindow
+    _HAS_VIEWER = True
+except Exception:
+    BvhViewerWindow = None  # type: ignore
+    _HAS_VIEWER = False
 
 
 MAX_FILES = 20
@@ -80,10 +86,13 @@ class MainWindow(QMainWindow):
         self.lang = lang
         self.setWindowTitle(tr("window_title", self.lang))
         self.resize(860, 760)
+        self._viewer_window = None
+        self._last_bvh_path: Path | None = None
         self._build_ui()
         self._update_lang_buttons()
         self.retranslateUi()
         self._update_timeline_state()
+        self._update_preview_button()
 
     def _build_ui(self):
         central = QWidget()
@@ -241,8 +250,11 @@ class MainWindow(QMainWindow):
         self.log.setMaximumHeight(120)
         layout.addWidget(self.log)
 
-        # Convert / Close
+        # Preview / Convert / Close
         bottom = QHBoxLayout()
+        self.btn_preview = QPushButton()
+        self.btn_preview.setEnabled(False)
+        bottom.addWidget(self.btn_preview)
         bottom.addStretch()
         self.btn_convert = QPushButton()
         self.btn_convert.setDefault(True)
@@ -260,8 +272,10 @@ class MainWindow(QMainWindow):
         self.btn_clear.clicked.connect(self.on_clear)
         self.btn_browse_out.clicked.connect(self.on_browse_out)
         self.btn_browse_skel.clicked.connect(self.on_browse_skel)
+        self.btn_preview.clicked.connect(self.on_preview)
         self.btn_convert.clicked.connect(self.on_convert)
         self.btn_close.clicked.connect(self.close)
+        self.edit_output.textChanged.connect(self._update_preview_button)
         self.spin_duration.valueChanged.connect(self._on_duration_changed)
         self.timeline_view.timeChanged.connect(self._on_timeline_changed)
         self.list_widget.itemSelectionChanged.connect(self._update_copy_button_state)
@@ -329,6 +343,8 @@ class MainWindow(QMainWindow):
         self.btn_copy.setText(tr("btn_copy", self.lang))
         self.btn_copy.setToolTip(tr("btn_copy_tip", self.lang))
         self.btn_clear.setText(tr("btn_clear", self.lang))
+        self.btn_preview.setText(tr("btn_preview", self.lang))
+        self.btn_preview.setToolTip(tr("btn_preview_tip", self.lang))
         self.btn_convert.setText(tr("btn_convert", self.lang))
         self.btn_close.setText(tr("btn_close", self.lang))
         self.label_computed.setStyleSheet("color: #333; font-weight: bold;")
@@ -342,6 +358,61 @@ class MainWindow(QMainWindow):
         # wheel hint as tooltip on zoom label
         self.lbl_zoom_pct.setToolTip(tr("zoom_tip_wheel", self.lang))
         self._update_zoom_ui()
+        self._update_preview_button()
+
+    # --- preview helpers ---
+    def _update_preview_button(self):
+        has = self._last_bvh_path is not None and Path(self._last_bvh_path).exists()
+        # also allow preview if output path exists
+        if not has:
+            out_text = self.edit_output.text().strip() if hasattr(self, "edit_output") else ""
+            if out_text and Path(out_text).exists() and Path(out_text).suffix.lower() == ".bvh":
+                has = True
+                self._last_bvh_path = Path(out_text)
+        self.btn_preview.setEnabled(bool(has and _HAS_VIEWER))
+
+    def on_preview(self):
+        # Prefer last written, else output field, else ask
+        target = None
+        if self._last_bvh_path and Path(self._last_bvh_path).exists():
+            target = Path(self._last_bvh_path)
+        else:
+            out_text = self.edit_output.text().strip()
+            if out_text and Path(out_text).exists():
+                target = Path(out_text)
+        if target is None or not target.exists():
+            # dialog
+            path, _ = QFileDialog.getOpenFileName(self, tr("dialog_output_bvh", self.lang), "", tr("filter_bvh", self.lang))
+            if not path:
+                return
+            target = Path(path)
+        if not _HAS_VIEWER:
+            QMessageBox.warning(self, tr("msg_error_title", self.lang), "Viewer not available")
+            return
+        try:
+            # reuse window
+            if self._viewer_window is None or not hasattr(self._viewer_window, "isVisible"):
+                self._viewer_window = BvhViewerWindow(initial_path=target, lang=self.lang, parent=self)
+            else:
+                # if closed, recreate
+                try:
+                    if not self._viewer_window.isVisible():
+                        self._viewer_window.load_bvh(target)
+                    else:
+                        self._viewer_window.load_bvh(target)
+                except RuntimeError:
+                    self._viewer_window = BvhViewerWindow(initial_path=target, lang=self.lang, parent=self)
+                    self._viewer_window.load_bvh(target)
+                    # fallback already loaded via init
+            self._viewer_window.show()
+            self._viewer_window.raise_()
+            self._viewer_window.activateWindow()
+            if target != self._last_bvh_path:
+                self._viewer_window.load_bvh(target)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, tr("msg_error_title", self.lang), f"Preview failed:\n{e}")
 
     # --- zoom helpers (GUIサイズ固定＋中央維持＋自動スクロール) ---
     def _update_zoom_ui(self):
@@ -1071,6 +1142,8 @@ class MainWindow(QMainWindow):
                 self.log_msg(tr("log_timeline_info", self.lang, d=duration, dt=frame_time, uf=len(frames_user), ins=inserted, tf=len(frames)))
                 self.log_msg(tr("log_hierarchy", self.lang, n=len(bones)))
                 write_bvh_frames(frames, bones, out_path, frame_time=frame_time, units=units, sl_compat=False, include_face=include_face, include_tail=include_tail)
+                self._last_bvh_path = Path(out_path)
+                self._update_preview_button()
                 self.log_msg(tr("log_done", self.lang, p=str(out_path), frames=len(frames), dt=frame_time))
                 QMessageBox.information(self, tr("msg_done_title", self.lang), tr("msg_done_body", self.lang, path=str(out_path), frames=len(frames), dt=frame_time, interp=inserted))
             except Exception as e:
@@ -1110,6 +1183,8 @@ class MainWindow(QMainWindow):
                 frames = [tpose_frame] + frames
                 self.log_msg(tr("log_hierarchy", self.lang, n=len(bones)))
                 write_bvh_frames(frames, bones, out_path, frame_time=frame_time, units=units, sl_compat=False, include_face=include_face, include_tail=include_tail)
+                self._last_bvh_path = Path(out_path)
+                self._update_preview_button()
                 self.log_msg(tr("log_done_single", self.lang, p=str(out_path), frames=len(frames), dt=frame_time))
                 QMessageBox.information(self, tr("msg_done_title", self.lang), tr("msg_done_body_single", self.lang, path=str(out_path), frames=len(frames)))
             except Exception as e:

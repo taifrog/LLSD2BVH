@@ -8,6 +8,7 @@ hiddenimports = [
     'PySide6.QtXml',
     'llsd2bvh.llsd_parser', 'llsd2bvh.skeleton', 'llsd2bvh.bvh_writer', 'llsd2bvh.euler_math',
     'llsd2bvh.timeline', 'llsd2bvh.widgets.timeline_view', 'llsd2bvh.i18n',
+    'llsd2bvh.viewer', 'llsd2bvh.viewer.bvh_parser', 'llsd2bvh.viewer.fk', 'llsd2bvh.viewer.gl_widget', 'llsd2bvh.viewer.viewer_window',
 ]
 
 a = Analysis(
