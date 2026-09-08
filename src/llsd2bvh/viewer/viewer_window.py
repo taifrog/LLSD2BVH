@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
-"""BVHビューアウィンドウ（3D棒人間 + 再生）。"""
+"""BVHビューアウィンドウ（3D棒人間 + 連続補間再生30fps）。"""
 from __future__ import annotations
 
+import math
+import time
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -11,7 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer, QSettings
 
 from .bvh_parser import parse_bvh, BvhData
-from .fk import compute_frame_positions
+from .fk import compute_frame_positions, compute_frame_positions_at_time
 from .gl_widget import StickFigureWidget
 from ..i18n import tr
 
@@ -27,6 +29,8 @@ class BvhViewerWindow(QMainWindow):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_timer)
         self._speed = 1.0
+        self._t_play: float = 0.0  # 再生時刻秒
+        self._last_tick: float = 0.0  # perf_counter
         self.setWindowTitle("BVH Viewer - Stick Figure")
         self.resize(900, 640)
         self._build_ui()
@@ -110,6 +114,12 @@ class BvhViewerWindow(QMainWindow):
         self.combo_speed.setCurrentIndex(2)
         self.combo_speed.currentIndexChanged.connect(self._on_speed)
         ctrl.addWidget(self.combo_speed)
+        # 補間切替（新規）
+        self.chk_interp = QCheckBox("補間")
+        self.chk_interp.setChecked(True)
+        self.chk_interp.setToolTip("ONで30fps滑らかに補間 / OFFで従来のコマ送り")
+        self.chk_interp.toggled.connect(self._on_interp_toggle)
+        ctrl.addWidget(self.chk_interp)
         ctrl.addSpacing(8)
         self.chk_skip = QCheckBox("Tpose先頭をスキップ")
         self.chk_skip.setChecked(True)
@@ -157,6 +167,8 @@ class BvhViewerWindow(QMainWindow):
         self.chk_skip.setText("Skip Tpose" if self.lang=="en" else "Tpose先頭をスキップ")
         if hasattr(self, "chk_loop"):
             self.chk_loop.setText("Loop" if self.lang=="en" else "ループ")
+        if hasattr(self, "chk_interp"):
+            self.chk_interp.setText("Interp" if self.lang=="en" else "補間")
         self.btn_front.setText("Front" if self.lang=="en" else "正面")
         self.btn_side.setText("Side" if self.lang=="en" else "側面")
         self.btn_top.setText("Top" if self.lang=="en" else "上面")
@@ -200,21 +212,26 @@ class BvhViewerWindow(QMainWindow):
         self.edit_path.setText(str(p))
         self.setWindowTitle(f"BVH Viewer - {p.name}")
         # スライダー
+        self.slider.blockSignals(True)
         self.slider.setEnabled(True)
         self.slider.setMinimum(0)
         self.slider.setMaximum(max(0, bvh.num_frames - 1))
         self.lbl_slider_min.setText("0")
         self.lbl_slider_max.setText(str(bvh.num_frames - 1))
+        self.slider.blockSignals(False)
         # 情報
         ch = bvh.num_channels
         self.lbl_info.setText(f"{p.name}  Frames:{bvh.num_frames}  FrameTime:{bvh.frame_time:.5f}s  Channels:{ch}  Joints:{len(bvh.joints)}")
         # 初期フレーム: skipなら1
         start = 1 if self.chk_skip.isChecked() and bvh.num_frames > 1 else 0
         self._frame_idx = start
+        self._t_play = start * bvh.frame_time
+        self.slider.blockSignals(True)
         self.slider.setValue(start)
+        self.slider.blockSignals(False)
         self._show_frame(start)
         self._update_controls()
-        # タイマー速度
+        # 速度反映（インターバルは固定30fps）
         self._on_speed()
 
     def _rotation_mode(self) -> str:
@@ -225,6 +242,7 @@ class BvhViewerWindow(QMainWindow):
             return
         idx = max(0, min(idx, self.bvh.num_frames - 1))
         self._frame_idx = idx
+        self._t_play = idx * self.bvh.frame_time
         try:
             positions, bones = compute_frame_positions(self.bvh, idx, rotation_mode=self._rotation_mode())
         except Exception as e:
@@ -235,10 +253,44 @@ class BvhViewerWindow(QMainWindow):
         t = idx * self.bvh.frame_time
         total_t = (self.bvh.num_frames - 1) * self.bvh.frame_time
         skip_note = " (skip Tpose)" if self.chk_skip.isChecked() and idx == 0 and self.bvh.num_frames > 1 else ""
-        if self.chk_skip.isChecked() and self.bvh.num_frames > 1:
-            # 表示は skip込みで 1-index?  keep raw
-            pass
         self.lbl_frame.setText(f"{idx}/{self.bvh.num_frames-1}  t={t:.3f}s / {total_t:.3f}s  dt={self.bvh.frame_time:.4f}s{skip_note}")
+
+    def _show_at_time(self, f_float: float, t_play: float):
+        """補間あり連続時刻で描画。f_floatは0..n-1連続、t_playは秒."""
+        if self.bvh is None:
+            return
+        n = self.bvh.num_frames
+        if n == 0:
+            return
+        # clampは fk側でも行うが、表示用にも
+        f_clamped = max(0.0, min(float(n - 1), f_float))
+        use_interp = self.chk_interp.isChecked() if hasattr(self, "chk_interp") else True
+        try:
+            if use_interp:
+                positions, bones = compute_frame_positions_at_time(self.bvh, f_clamped, rotation_mode=self._rotation_mode())
+            else:
+                idx = int(math.floor(f_clamped + 1e-9))
+                idx = max(0, min(idx, n - 1))
+                positions, bones = compute_frame_positions(self.bvh, idx, rotation_mode=self._rotation_mode())
+        except Exception as e:
+            print(f"FK failed f {f_clamped}: {e}")
+            return
+        self.viewer.set_frame(bones, positions)
+        # 表示: fとalpha、t
+        total_t = (n - 1) * self.bvh.frame_time
+        i = int(math.floor(f_clamped + 1e-9))
+        alpha = f_clamped - i
+        # スライダーは整数部のみ同期（シグナルブロック）
+        self._frame_idx = i
+        self.slider.blockSignals(True)
+        try:
+            self.slider.setValue(i)
+        finally:
+            self.slider.blockSignals(False)
+        if use_interp and 0 < alpha < 1 - 1e-9:
+            self.lbl_frame.setText(f"{i}->{i+1} ({alpha*100:.0f}%) f={f_clamped:.2f}  t={t_play:.3f}s / {total_t:.3f}s  dt={self.bvh.frame_time:.4f}s [補間]")
+        else:
+            self.lbl_frame.setText(f"{i}/{n-1}  t={t_play:.3f}s / {total_t:.3f}s  dt={self.bvh.frame_time:.4f}s" + (" [補間]" if use_interp else ""))
 
     def _update_controls(self):
         has = self.bvh is not None and self.bvh.num_frames > 0
@@ -249,7 +301,27 @@ class BvhViewerWindow(QMainWindow):
 
     # ---- 操作 ----
     def _on_slider(self, val: int):
+        # スライダーは離散操作。再生中でも時刻を同期し、ドラッグ遅延を避ける
+        if self.bvh is None:
+            return
+        # 再生中なら時刻基準をリセットしてジャンプ違和感を抑える
+        if self._is_playing:
+            self._t_play = val * self.bvh.frame_time
+            self._last_tick = time.perf_counter()
         self._show_frame(val)
+
+    def _effective_t_range(self):
+        """(t_min, t_max) 秒。skip時は先頭Tposeを除外."""
+        if self.bvh is None:
+            return (0.0, 0.0)
+        n = self.bvh.num_frames
+        ft = self.bvh.frame_time
+        t_max = (n - 1) * ft
+        t_min = ft if (self.chk_skip.isChecked() and n > 1) else 0.0
+        # t_minがt_maxを超えないように
+        if t_min > t_max:
+            t_min = t_max
+        return (t_min, t_max)
 
     def _on_prev(self):
         if self.bvh is None:
@@ -259,14 +331,25 @@ class BvhViewerWindow(QMainWindow):
             nxt = max(1, nxt)
         else:
             nxt = max(0, nxt)
+        # 再生中なら時刻も同期
+        if self._is_playing:
+            self._t_play = nxt * self.bvh.frame_time
+            self._last_tick = time.perf_counter()
         self.slider.setValue(nxt)
+        if not self._is_playing:
+            self._show_frame(nxt)
 
     def _on_next(self):
         if self.bvh is None:
             return
         nxt = self._frame_idx + 1
         nxt = min(self.bvh.num_frames - 1, nxt)
+        if self._is_playing:
+            self._t_play = nxt * self.bvh.frame_time
+            self._last_tick = time.perf_counter()
         self.slider.setValue(nxt)
+        if not self._is_playing:
+            self._show_frame(nxt)
 
     def _on_play(self):
         if self.bvh is None or self.bvh.num_frames <= 1:
@@ -274,12 +357,15 @@ class BvhViewerWindow(QMainWindow):
         self._is_playing = not self._is_playing
         self._update_play_label()
         if self._is_playing:
-            # 末尾なら先頭（skip考慮）へ
-            if self._frame_idx >= self.bvh.num_frames - 1:
-                start = 1 if self.chk_skip.isChecked() and self.bvh.num_frames > 1 else 0
-                self.slider.setValue(start)
-            interval = max(10, int(self.bvh.frame_time * 1000 / self._speed))
-            self._timer.start(interval)
+            t_min, t_max = self._effective_t_range()
+            # 末尾なら先頭へ
+            if self._t_play >= t_max - 1e-9:
+                self._t_play = t_min
+                # 表示も同期
+                f = self._t_play / self.bvh.frame_time if self.bvh.frame_time > 1e-9 else 0
+                self._show_at_time(f, self._t_play)
+            self._last_tick = time.perf_counter()
+            self._timer.start(33)  # ~30fps 固定
         else:
             self._timer.stop()
 
@@ -287,17 +373,39 @@ class BvhViewerWindow(QMainWindow):
         if self.bvh is None:
             self._timer.stop()
             return
-        nxt = self._frame_idx + 1
-        if nxt >= self.bvh.num_frames:
+        now = time.perf_counter()
+        dt = now - self._last_tick
+        self._last_tick = now
+        # 極端なdt（サスペンド等）はクランプ
+        if dt > 0.2:
+            dt = 0.033
+        self._t_play += dt * self._speed
+        t_min, t_max = self._effective_t_range()
+        ft = self.bvh.frame_time
+        # ループ判定
+        if self._t_play > t_max:
             if self.chk_loop.isChecked():
-                start = 1 if self.chk_skip.isChecked() and self.bvh.num_frames > 1 else 0
-                self.slider.setValue(start)
+                span = t_max - t_min
+                if span <= 1e-9:
+                    self._t_play = t_min
+                else:
+                    # ラップ：余りを加算
+                    self._t_play = t_min + (self._t_play - t_max) % span
+                    # 余りがほぼ0ならt_minちょうどに
+                    if self._t_play > t_max - 1e-9:
+                        self._t_play = t_min
+            else:
+                self._t_play = t_max
+                self._timer.stop()
+                self._is_playing = False
+                self._update_play_label()
+                f = self._t_play / ft if ft > 1e-9 else 0
+                self._show_at_time(f, self._t_play)
                 return
-            self._timer.stop()
-            self._is_playing = False
-            self._update_play_label()
-            return
-        self.slider.setValue(nxt)
+        if self._t_play < t_min:
+            self._t_play = t_min
+        f = self._t_play / ft if ft > 1e-9 else 0
+        self._show_at_time(f, self._t_play)
 
     def _on_speed(self):
         txt = self.combo_speed.currentText()
@@ -305,20 +413,51 @@ class BvhViewerWindow(QMainWindow):
             self._speed = float(txt.replace("x", ""))
         except Exception:
             self._speed = 1.0
-        if self._is_playing and self.bvh:
-            interval = max(10, int(self.bvh.frame_time * 1000 / self._speed))
-            self._timer.start(interval)
+        # 30fps固定のためタイマー再起動は不要
+
+    def _on_interp_toggle(self, _checked: bool):
+        # 補間切替で現在時刻を再描画
+        if self.bvh:
+            f = self._t_play / self.bvh.frame_time if self.bvh.frame_time > 1e-9 else float(self._frame_idx)
+            self._show_at_time(f, self._t_play)
 
     def _on_skip_toggle(self, checked: bool):
-        # 現在表示が0でskip有効になったら1へ
-        if self.bvh and checked and self._frame_idx == 0 and self.bvh.num_frames > 1:
-            self.slider.setValue(1)
-        self._show_frame(self.slider.value())
+        # 現在表示が0でskip有効になったら1へ + t範囲再クランプ
+        if self.bvh is None:
+            return
+        t_min, t_max = self._effective_t_range()
+        # 再生中でも停止中でも範囲内にクランプ
+        if self._t_play < t_min:
+            self._t_play = t_min
+            f = self._t_play / self.bvh.frame_time if self.bvh.frame_time > 1e-9 else 0
+            if self._is_playing:
+                self._show_at_time(f, self._t_play)
+            else:
+                # 停止中は離散表示
+                self._frame_idx = int(round(f))
+                self.slider.blockSignals(True)
+                self.slider.setValue(self._frame_idx)
+                self.slider.blockSignals(False)
+                self._show_frame(self._frame_idx)
+            return
+        # 停止中でframe_idxが0由来なら同期
+        if not self._is_playing:
+            if checked and self._frame_idx == 0 and self.bvh.num_frames > 1:
+                self.slider.setValue(1)
+            self._show_frame(self.slider.value())
+        else:
+            # 再生中は現在時刻で再描画
+            f = self._t_play / self.bvh.frame_time if self.bvh.frame_time > 1e-9 else 0
+            self._show_at_time(f, self._t_play)
 
     def _on_rot_changed(self, _idx: int):
-        # 回転モード切替で再描画
+        # 回転モード切替で再描画（補間状態を維持）
         if self.bvh:
-            self._show_frame(self._frame_idx)
+            if self._is_playing:
+                f = self._t_play / self.bvh.frame_time if self.bvh.frame_time > 1e-9 else float(self._frame_idx)
+                self._show_at_time(f, self._t_play)
+            else:
+                self._show_frame(self._frame_idx)
 
     # ---- DnD ----
     def dragEnterEvent(self, event):

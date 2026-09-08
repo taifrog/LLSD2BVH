@@ -250,11 +250,14 @@ class MainWindow(QMainWindow):
         self.log.setMaximumHeight(120)
         layout.addWidget(self.log)
 
-        # Preview / Convert / Close
+        # Preview / Viewer / Convert / Close
         bottom = QHBoxLayout()
         self.btn_preview = QPushButton()
         self.btn_preview.setEnabled(False)
         bottom.addWidget(self.btn_preview)
+        self.btn_viewer = QPushButton()
+        self.btn_viewer.setEnabled(bool(_HAS_VIEWER))
+        bottom.addWidget(self.btn_viewer)
         bottom.addStretch()
         self.btn_convert = QPushButton()
         self.btn_convert.setDefault(True)
@@ -273,6 +276,7 @@ class MainWindow(QMainWindow):
         self.btn_browse_out.clicked.connect(self.on_browse_out)
         self.btn_browse_skel.clicked.connect(self.on_browse_skel)
         self.btn_preview.clicked.connect(self.on_preview)
+        self.btn_viewer.clicked.connect(self.on_viewer)
         self.btn_convert.clicked.connect(self.on_convert)
         self.btn_close.clicked.connect(self.close)
         self.edit_output.textChanged.connect(self._update_preview_button)
@@ -345,6 +349,9 @@ class MainWindow(QMainWindow):
         self.btn_clear.setText(tr("btn_clear", self.lang))
         self.btn_preview.setText(tr("btn_preview", self.lang))
         self.btn_preview.setToolTip(tr("btn_preview_tip", self.lang))
+        self.btn_viewer.setText(tr("btn_viewer", self.lang))
+        self.btn_viewer.setToolTip(tr("btn_viewer_tip", self.lang))
+        self.btn_viewer.setEnabled(bool(_HAS_VIEWER))
         self.btn_convert.setText(tr("btn_convert", self.lang))
         self.btn_close.setText(tr("btn_close", self.lang))
         self.label_computed.setStyleSheet("color: #333; font-weight: bold;")
@@ -371,6 +378,37 @@ class MainWindow(QMainWindow):
                 self._last_bvh_path = Path(out_text)
         self.btn_preview.setEnabled(bool(has and _HAS_VIEWER))
 
+    def _open_viewer_window(self, target: Path | None):
+        if not _HAS_VIEWER:
+            QMessageBox.warning(self, tr("msg_error_title", self.lang), "Viewer not available")
+            return
+        try:
+            if self._viewer_window is None or not hasattr(self._viewer_window, "isVisible"):
+                self._viewer_window = BvhViewerWindow(initial_path=target, lang=self.lang, parent=self)
+            else:
+                try:
+                    if not self._viewer_window.isVisible():
+                        if target is not None:
+                            self._viewer_window.load_bvh(target)
+                    else:
+                        if target is not None:
+                            self._viewer_window.load_bvh(target)
+                except RuntimeError:
+                    self._viewer_window = BvhViewerWindow(initial_path=target, lang=self.lang, parent=self)
+                    if target is not None:
+                        self._viewer_window.load_bvh(target)
+            self._viewer_window.show()
+            self._viewer_window.raise_()
+            self._viewer_window.activateWindow()
+            if target is not None and target != self._last_bvh_path:
+                # on_preview経由なら再読込保証（空ビューアからの再利用時）
+                if not self._viewer_window.isVisible():
+                    self._viewer_window.load_bvh(target)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, tr("msg_error_title", self.lang), f"Preview failed:\n{e}")
+
     def on_preview(self):
         # Prefer last written, else output field, else ask
         target = None
@@ -386,33 +424,13 @@ class MainWindow(QMainWindow):
             if not path:
                 return
             target = Path(path)
-        if not _HAS_VIEWER:
-            QMessageBox.warning(self, tr("msg_error_title", self.lang), "Viewer not available")
-            return
-        try:
-            # reuse window
-            if self._viewer_window is None or not hasattr(self._viewer_window, "isVisible"):
-                self._viewer_window = BvhViewerWindow(initial_path=target, lang=self.lang, parent=self)
-            else:
-                # if closed, recreate
-                try:
-                    if not self._viewer_window.isVisible():
-                        self._viewer_window.load_bvh(target)
-                    else:
-                        self._viewer_window.load_bvh(target)
-                except RuntimeError:
-                    self._viewer_window = BvhViewerWindow(initial_path=target, lang=self.lang, parent=self)
-                    self._viewer_window.load_bvh(target)
-                    # fallback already loaded via init
-            self._viewer_window.show()
-            self._viewer_window.raise_()
-            self._viewer_window.activateWindow()
-            if target != self._last_bvh_path:
-                self._viewer_window.load_bvh(target)
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            QMessageBox.critical(self, tr("msg_error_title", self.lang), f"Preview failed:\n{e}")
+        self._open_viewer_window(target)
+
+    def on_viewer(self):
+        # 任意BVH表示: 空で開き、既存なら前面化のみ（ファイル選択はビューア側の[開く]/DnDで）
+        target = None
+        # 変換済みBVHがあれば初期表示に使わない（空で開く仕様）。previewと区別する。
+        self._open_viewer_window(target)
 
     # --- zoom helpers (GUIサイズ固定＋中央維持＋自動スクロール) ---
     def _update_zoom_ui(self):

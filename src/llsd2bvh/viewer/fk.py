@@ -83,6 +83,70 @@ _SL_COMPAT_MAP = {
     "Yrotation": "Z",
 }
 
+
+def _lerp(a: float, b: float, t: float) -> float:
+    return a + (b - a) * t
+
+
+def lerp_angle_deg(a: float, b: float, alpha: float) -> float:
+    """最短経路で角度を線形補間 (deg). wrapなし平均の裏回りを防ぐ."""
+    d = ((b - a + 180.0) % 360.0) - 180.0
+    return a + d * alpha
+
+
+def _fk_from_row(bvh: BvhData, row: List[float], rotation_mode: str = "sl_compat") -> Tuple[Dict[str, Tuple[float, float, float]], List[Tuple[Tuple[float,float,float], Tuple[float,float,float]]]]:
+    """row(channel_order順)からFKで world positions/bones を算出."""
+    channel_values: Dict[Tuple[str, str], float] = {}
+    for (jname, ch), val in zip(bvh.channel_order, row):
+        channel_values[(jname, ch)] = val
+
+    positions: Dict[str, Tuple[float,float,float]] = {}
+    bones: List[Tuple[Tuple[float,float,float], Tuple[float,float,float]]] = []
+
+    def recurse(joint: BvhJoint, parent_mat: List[List[float]]):
+        ox, oy, oz = joint.offset
+        px = channel_values.get((joint.name, "Xposition"), 0.0)
+        py = channel_values.get((joint.name, "Yposition"), 0.0)
+        pz = channel_values.get((joint.name, "Zposition"), 0.0)
+        has_pos = any(k == (joint.name, c) for c in ("Xposition","Yposition","Zposition") for k in channel_values)
+        if has_pos:
+            tx = ox + px if (joint.name, "Xposition") in channel_values else ox
+            ty = oy + py if (joint.name, "Yposition") in channel_values else oy
+            tz = oz + pz if (joint.name, "Zposition") in channel_values else oz
+        else:
+            tx, ty, tz = ox, oy, oz
+
+        local = _mat_translate(tx, ty, tz)
+
+        for ch in joint.channels:
+            if "rotation" not in ch:
+                continue
+            val = channel_values.get((joint.name, ch), 0.0)
+            if rotation_mode == "sl_compat":
+                axis = _SL_COMPAT_MAP.get(ch, ch[0])
+            else:
+                axis = ch[0]
+            if axis == "Z":
+                local = _mat_mult(local, _mat_rot_z(val))
+            elif axis == "X":
+                local = _mat_mult(local, _mat_rot_x(val))
+            elif axis == "Y":
+                local = _mat_mult(local, _mat_rot_y(val))
+
+        world = _mat_mult(parent_mat, local)
+        pos = _transform_point(world, (0.0, 0.0, 0.0))
+        positions[joint.name] = pos
+
+        for child in joint.children:
+            recurse(child, world)
+            child_pos = positions[child.name]
+            bones.append((pos, child_pos))
+
+    identity = _mat_identity()
+    recurse(bvh.root, identity)
+    return positions, bones
+
+
 def compute_frame_positions(bvh: BvhData, frame_idx: int, rotation_mode: str = "sl_compat") -> Tuple[Dict[str, Tuple[float, float, float]], List[Tuple[Tuple[float,float,float], Tuple[float,float,float]]]]:
     """指定フレームのワールド座標を算出。
 
@@ -99,75 +163,45 @@ def compute_frame_positions(bvh: BvhData, frame_idx: int, rotation_mode: str = "
     if not (0 <= frame_idx < bvh.num_frames):
         raise IndexError(f"frame_idx {frame_idx} out of range 0..{bvh.num_frames-1}")
     row = bvh.frames[frame_idx]
-    # Map (joint, channel) -> value
-    channel_values: Dict[Tuple[str, str], float] = {}
-    for (jname, ch), val in zip(bvh.channel_order, row):
-        channel_values[(jname, ch)] = val
+    return _fk_from_row(bvh, row, rotation_mode=rotation_mode)
 
-    positions: Dict[str, Tuple[float,float,float]] = {}
-    bones: List[Tuple[Tuple[float,float,float], Tuple[float,float,float]]] = []
 
-    def recurse(joint: BvhJoint, parent_mat: List[List[float]]):
-        # Build local matrix
-        # 1. Offset translation
-        ox, oy, oz = joint.offset
-        # For root, add position channels if present
-        # Determine root position
-        px = channel_values.get((joint.name, "Xposition"), 0.0)
-        py = channel_values.get((joint.name, "Yposition"), 0.0)
-        pz = channel_values.get((joint.name, "Zposition"), 0.0)
-        has_pos = any(k == (joint.name, c) for c in ("Xposition","Yposition","Zposition") for k in channel_values)
-        # But only root typically has position; check if any position channel exists for this joint
-        # If this joint has position channels, treat translation as (pos + offset) ? 
-        # BVH spec: local = T(offset + motion_pos?) For root, offset is added.
-        # We'll do: local translation = offset + motion_pos (if has_pos), else just offset
-        if has_pos:
-            # check existence individually; if channel_order includes position, use values
-            # For joints without position channels, px/py/pz will be 0
-            # So add offset
-            tx = ox + px if (joint.name, "Xposition") in channel_values else ox
-            ty = oy + py if (joint.name, "Yposition") in channel_values else oy
-            tz = oz + pz if (joint.name, "Zposition") in channel_values else oz
+def compute_frame_positions_at_time(bvh: BvhData, f_float: float, rotation_mode: str = "sl_compat") -> Tuple[Dict[str, Tuple[float, float, float]], List[Tuple[Tuple[float,float,float], Tuple[float,float,float]]]]:
+    """浮動フレーム位置で補間したFK結果を返す。チャネル空間で角度は最短経路lerp、位置はlerp。
+
+    f_float: 0 .. num_frames-1 の連続値。範囲外はクランプ。
+    補間はチャネル値に対して行い、結果を1回だけFKする（ワールド座標lerpではないため骨長維持）。
+    """
+    n = bvh.num_frames
+    if n == 0:
+        raise ValueError("bvh has no frames")
+    if n == 1:
+        return _fk_from_row(bvh, bvh.frames[0], rotation_mode=rotation_mode)
+    # clamp
+    if f_float <= 0:
+        return _fk_from_row(bvh, bvh.frames[0], rotation_mode=rotation_mode)
+    if f_float >= n - 1:
+        return _fk_from_row(bvh, bvh.frames[n - 1], rotation_mode=rotation_mode)
+    i = int(math.floor(f_float))
+    alpha = f_float - i
+    # exact frame
+    if alpha < 1e-9:
+        return _fk_from_row(bvh, bvh.frames[i], rotation_mode=rotation_mode)
+    if alpha > 1 - 1e-9:
+        i2 = min(i + 1, n - 1)
+        return _fk_from_row(bvh, bvh.frames[i2], rotation_mode=rotation_mode)
+    row_a = bvh.frames[i]
+    row_b = bvh.frames[i + 1]
+    interp_row: List[float] = []
+    for k, (jname, ch) in enumerate(bvh.channel_order):
+        va = row_a[k]
+        vb = row_b[k]
+        if "rotation" in ch:
+            interp_row.append(lerp_angle_deg(va, vb, alpha))
         else:
-            tx, ty, tz = ox, oy, oz
-
-        local = _mat_translate(tx, ty, tz)
-
-        # Rotations in channel order sequence
-        # For joints with CHANNELS like "Zrotation Xrotation Yrotation", apply in that order
-        for ch in joint.channels:
-            if "rotation" not in ch:
-                continue
-            val = channel_values.get((joint.name, ch), 0.0)
-            # SL互換では チャネル→軸 を巡回 (Z->X, X->Y, Y->Z)
-            if rotation_mode == "sl_compat":
-                axis = _SL_COMPAT_MAP.get(ch, ch[0])
-            else:
-                axis = ch[0]  # Z/X/Y
-            if axis == "Z":
-                local = _mat_mult(local, _mat_rot_z(val))
-            elif axis == "X":
-                local = _mat_mult(local, _mat_rot_x(val))
-            elif axis == "Y":
-                local = _mat_mult(local, _mat_rot_y(val))
-
-        world = _mat_mult(parent_mat, local)
-        # Joint world position is transform of origin (0,0,0) by world matrix
-        pos = _transform_point(world, (0.0, 0.0, 0.0))
-        positions[joint.name] = pos
-
-        # Parent position for bone line is parent joint pos (if not root)
-        # We'll compute bones after recursion: each child connected to parent pos
-        for child in joint.children:
-            # Recurse first to get child's position? Need parent pos already.
-            # We'll recurse then create bone segment parent->child
-            recurse(child, world)
-            child_pos = positions[child.name]
-            bones.append((pos, child_pos))
-
-    identity = _mat_identity()
-    recurse(bvh.root, identity)
-    return positions, bones
+            # position / others: lerp
+            interp_row.append(_lerp(va, vb, alpha))
+    return _fk_from_row(bvh, interp_row, rotation_mode=rotation_mode)
 
 
 def compute_all_frames(bvh: BvhData, rotation_mode: str = "sl_compat") -> List[Dict[str, Tuple[float,float,float]]]:

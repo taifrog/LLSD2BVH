@@ -14,7 +14,9 @@ __all__ = [
     "BvhData",
     "BvhJoint",
     "compute_frame_positions",
+    "compute_frame_positions_at_time",
     "compute_all_frames",
+    "lerp_angle_deg",
     "StickFigureWidget",
     "BvhViewerWindow",
 ]
@@ -24,7 +26,9 @@ _LAZY_MAP = {
     "BvhData": ("llsd2bvh.viewer.bvh_parser", "BvhData"),
     "BvhJoint": ("llsd2bvh.viewer.bvh_parser", "BvhJoint"),
     "compute_frame_positions": ("llsd2bvh.viewer.fk", "compute_frame_positions"),
+    "compute_frame_positions_at_time": ("llsd2bvh.viewer.fk", "compute_frame_positions_at_time"),
     "compute_all_frames": ("llsd2bvh.viewer.fk", "compute_all_frames"),
+    "lerp_angle_deg": ("llsd2bvh.viewer.fk", "lerp_angle_deg"),
     "StickFigureWidget": ("llsd2bvh.viewer.gl_widget", "StickFigureWidget"),
     "BvhViewerWindow": ("llsd2bvh.viewer.viewer_window", "BvhViewerWindow"),
 }
@@ -32,7 +36,7 @@ _LAZY_MAP = {
 if TYPE_CHECKING:
     # 型チェッカー用に直接 import（実行時には遅延）
     from .bvh_parser import BvhData, BvhJoint, parse_bvh  # noqa: F401
-    from .fk import compute_all_frames, compute_frame_positions  # noqa: F401
+    from .fk import compute_all_frames, compute_frame_positions, compute_frame_positions_at_time, lerp_angle_deg  # noqa: F401
     from .gl_widget import StickFigureWidget  # noqa: F401
     from .viewer_window import BvhViewerWindow  # noqa: F401
 
