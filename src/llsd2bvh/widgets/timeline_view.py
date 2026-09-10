@@ -350,11 +350,11 @@ class TimelineView(QWidget):
             font.setBold(True)
             painter.setFont(font)
             fm2 = QFontMetrics(font)
-            # 1行目: "#n 名前"（中間省略で末尾の識別数字・拡張子を残す）
+            # 1行目: "#n 名前"（拡張子は一律非表示＋中間省略で末尾の識別数字を残す）
             prefix = f"#{num} "
             # 残り幅で省略
             avail_w = BLOCK_W - 8
-            full_label = elide_middle_label(prefix, p.name, avail_w, fm2.horizontalAdvance)
+            full_label = elide_middle_label(prefix, p.stem, avail_w, fm2.horizontalAdvance)
             tw = fm2.horizontalAdvance(full_label)
             painter.drawText(rect_x + (BLOCK_W - tw) // 2, rect_y + 14, full_label)
 

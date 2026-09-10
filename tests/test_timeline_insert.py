@@ -57,3 +57,16 @@ def test_elide_no_extension():
     assert label.startswith("#2 ")
     assert "…" in label
     assert len(label) <= 12
+
+
+def test_elide_stem_keeps_identifier():
+    # ブロック表示は p.stem（拡張子なし）＋中間省略。識別数字が残ること
+    from pathlib import Path
+    stem = Path("MuMuDance03.xml").stem
+    assert stem == "MuMuDance03"
+    assert ".xml" not in stem
+    label = elide_middle_label("#3 ", stem, 12, _len_advance)
+    assert label.startswith("#3 ")
+    assert label.endswith("03")
+    assert ".xml" not in label
+    assert len(label) <= 12
