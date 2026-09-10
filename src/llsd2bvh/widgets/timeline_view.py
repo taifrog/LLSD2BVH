@@ -34,6 +34,44 @@ _BLOCK_FIXED = QColor(70, 130, 210)
 _BLOCK_TEXT = QColor(255, 255, 255)
 _BLOCK_BORDER = QColor(40, 90, 170)
 
+_DEFAULT_TOOLTIP = "ドラッグで時刻を移動、ダブルクリックで数値入力（先頭0s/末尾durationは固定）／空所をドラッグで左右スクロール／ホイールで拡大縮小"
+
+
+def elide_middle_label(prefix: str, name: str, avail_w: float, advance) -> str:
+    """ブロック内ラベルを中間省略で詰める。末尾（識別数字・拡張子）を残す。
+
+    args:
+        prefix: "#n " 等の接頭辞（省略しない）
+        name: ファイル名
+        avail_w: 使用可能な幅 (px)
+        advance: 文字列 -> 幅 (px) の計測関数（QFontMetrics.horizontalAdvance 等）
+
+    96px固定幅でも `MuMuDance01〜08` が `#n MuMuDa…` で全滅する問題を避け、
+    `#3 MuMu…e03.xml` のように末尾を残す。
+    """
+    full = prefix + name
+    try:
+        if advance(full) <= avail_w:
+            return full
+    except Exception:
+        return full
+    if "." in name:
+        stem, dot, ext = name.rpartition(".")
+        ext_part = dot + ext
+    else:
+        stem, ext_part = name, ""
+    tail_core = stem[-4:] if len(stem) > 4 else stem
+    head = stem[:-4] if len(stem) > 4 else ""
+    tail = tail_core + ext_part
+    try:
+        while head and advance(prefix + head + "…" + tail) > avail_w:
+            head = head[:-1]
+        while not head and len(tail) > 1 and advance(prefix + "…" + tail) > avail_w:
+            tail = tail[1:]
+    except Exception:
+        return full
+    return prefix + head + "…" + tail
+
 
 class TimelineView(QWidget):
     timeChanged = Signal()
@@ -56,7 +94,8 @@ class TimelineView(QWidget):
         self._panning = False
         self._pan_start_x = 0
         self._pan_start_scroll = 0
-        self.setToolTip("ドラッグで時刻を移動、ダブルクリックで数値入力（先頭0s/末尾durationは固定）／空所をドラッグで左右スクロール／ホイールで拡大縮小")
+        self._default_tooltip = _DEFAULT_TOOLTIP
+        self.setToolTip(self._default_tooltip)
 
     def set_duration(self, v: float):
         self._duration = max(0.1, min(60.0, v))
@@ -311,17 +350,11 @@ class TimelineView(QWidget):
             font.setBold(True)
             painter.setFont(font)
             fm2 = QFontMetrics(font)
-            # 1行目: "#n 名前"
-            short = p.name
-            # 番号込みで省略
+            # 1行目: "#n 名前"（拡張子は一律非表示＋中間省略で末尾の識別数字を残す）
             prefix = f"#{num} "
             # 残り幅で省略
             avail_w = BLOCK_W - 8
-            full_label = prefix + short
-            # 省略処理
-            while fm2.horizontalAdvance(full_label) > avail_w and len(short) > 4:
-                short = short[:-5] + "…"
-                full_label = prefix + short
+            full_label = elide_middle_label(prefix, p.stem, avail_w, fm2.horizontalAdvance)
             tw = fm2.horizontalAdvance(full_label)
             painter.drawText(rect_x + (BLOCK_W - tw) // 2, rect_y + 14, full_label)
 
@@ -429,6 +462,17 @@ class TimelineView(QWidget):
         h_idx = self._hit_test(event.pos())
         if h_idx != self._hover_idx:
             self._hover_idx = h_idx
+            # ブロック別ツールチップ: フル名＋時刻。空所では既定文言に戻す
+            if h_idx is not None:
+                try:
+                    items_tip = self.get_items()
+                    pp, tt = items_tip[h_idx]
+                    nn = self._resolve_number(pp, h_idx, items_tip)
+                    self.setToolTip(f"#{nn} {pp.name}\n{tt:.2f}s")
+                except Exception:
+                    pass
+            else:
+                self.setToolTip(self._default_tooltip)
             self.update()
         if self._drag_idx is not None and event.buttons() & Qt.LeftButton:
             new_x = event.pos().x() - self._drag_offset
@@ -502,6 +546,7 @@ class TimelineView(QWidget):
 
     def leaveEvent(self, event):
         self._hover_idx = None
+        self.setToolTip(self._default_tooltip)
         self.update()
         if not self._panning:
             self.setCursor(Qt.ArrowCursor)

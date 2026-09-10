@@ -25,7 +25,7 @@ except ImportError as e:
 from .llsd_parser import parse_llsd_xml
 from .skeleton import load_skeleton, filter_skeleton
 from .bvh_writer import write_bvh_frames
-from .timeline import compute_timeline_frames, MIN_FRAME_TIME, MAX_DURATION
+from .timeline import compute_timeline_frames, insertion_mid_time, MIN_FRAME_TIME, MAX_DURATION
 from .widgets.timeline_view import TimelineView
 from .i18n import tr, DEFAULT
 try:
@@ -668,19 +668,15 @@ class MainWindow(QMainWindow):
         elif is_first:
             next_ts = sorted([t for _, t in items if t > src_t + 1e-9])
             next_t = next_ts[0] if next_ts else dur
-            t_new = min(src_t + 0.05, (src_t + next_t) / 2)
-            t_new = max(src_t + 0.05, min(t_new, next_t - 0.05)) if next_t - src_t >= 0.10 else src_t + 0.05
+            # 中点優先: 前後の中央に配置して横の重なりを回避（狭区間は src+0.05）
+            t_new = insertion_mid_time(src_t, next_t)
         else:
             next_ts = sorted([t for _, t in items if t > src_t + 1e-9])
             next_t = next_ts[0] if next_ts else dur
-            mid = (src_t + next_t) / 2
-            t_new = min(src_t + 0.05, mid)
-            if next_t - src_t >= 0.10:
-                t_new = max(src_t + 0.05, min(t_new, next_t - 0.05))
-            else:
-                t_new = src_t + 0.05
-                if t_new > dur - 0.001:
-                    t_new = dur - 0.001
+            # 中点優先: 前後の中央に配置して横の重なりを回避（狭区間は src+0.05）
+            t_new = insertion_mid_time(src_t, next_t)
+            if t_new > dur - 0.001:
+                t_new = dur - 0.001
         t_new = max(0.001, min(t_new, dur - 0.001))
         t_new = max(0.0, min(t_new, dur))
         # リスト順で src の直後に挿入（タイムライン順＝リスト順）
@@ -887,12 +883,9 @@ class MainWindow(QMainWindow):
                 # next は list_paths の idx+1 以降で既存に存在する最初の項目の時刻を探す
                 next_t = dur
                 # 既存の残りをリスト順で走査して次の一致を探す（近似: dur を使用）
-                # より正確には、既存_items の idx 付近の時刻を使うが、非均一時は dur で十分
-                # ここでは prev と dur の中間を暫定とし、後で _enforce で単調性を保証
-                # 要件に近い: prev+0.05 と中間の小さい方
-                # next_t を dur として計算
-                mid = (prev_t + next_t) / 2
-                t_new = min(prev_t + 0.05, mid) if new_items else 0.0
+                # 中点優先: prev と dur の中央に配置して横の重なりを回避。
+                # 後で _enforce で単調性を保証
+                t_new = insertion_mid_time(prev_t, next_t) if new_items else 0.0
                 # 先頭は0固定、末尾はD固定のため、内側のみ上記を使用
                 if idx == count - 1:
                     t_new = dur
@@ -902,10 +895,9 @@ class MainWindow(QMainWindow):
                     # prev と next の間に収める（next が dur の場合は上記 mid）
                     # list順で next がまだ未確定のため dur で近似
                     pass
-                # 末尾以外は prev+0.05 を優先しつつ D を超えない
+                # 末尾以外は中点優先で D を超えない（狭区間は prev+0.05）
                 if idx != 0 and idx != count - 1:
-                    # next が dur の場合、中間は大きくなるため prev+0.05 が選ばれる
-                    t_new = min(prev_t + 0.05, (prev_t + dur) / 2)
+                    t_new = insertion_mid_time(prev_t, dur)
                 new_items.append((p, float(t_new)))
         # 単調性を _enforce で保証するため、そのままセット
         self.timeline_view.set_items(new_items)
