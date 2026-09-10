@@ -94,6 +94,22 @@ def _lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
 
 
+def insertion_mid_time(lo: float, hi: float, eps: float = 0.05) -> float:
+    """新規ブロック挿入時の時刻を中点優先で算出。
+
+    区間 [lo, hi] の中央を返し、最小分離 eps でクランプする。
+    区間が狭く中点が取れない場合 (hi - lo < 2*eps) は従来通り lo + eps
+    を返し、後段の _enforce 相当で単調性を保証させる。
+    """
+    lo = float(lo)
+    hi = float(hi)
+    eps = float(eps)
+    if hi - lo >= 2 * eps:
+        mid = (lo + hi) / 2.0
+        return max(lo + eps, min(mid, hi - eps))
+    return lo + eps
+
+
 def interpolate_joint_data(data_a: Dict, data_b: Dict, alpha: float) -> Dict:
     """2フレーム間の補間。rotationはSlerp、positionはlerp。"""
     if alpha <= 0:
