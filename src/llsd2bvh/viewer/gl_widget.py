@@ -50,12 +50,12 @@ class StickFigureWidget(QWidget):
         """BVH座標(Z-up, Y=左右, X=前)を Y-up ビュー座標へ変換。
 
         SL avatar_skeleton: X=前, Y=左右(左+), Z=上。
-        Viewer: Y=上, X=左右, Z=奥行。
-        変換: viewer_x = bvh_y, viewer_y = bvh_z, viewer_z = -bvh_x
-        で足が下・頭が上、左右が画面左右に対応。
+        Viewer: Y=上, X=左右(右+), Z=奥行(手前+)。
+        変換: viewer_x = -bvh_y, viewer_y = bvh_z, viewer_z = -bvh_x
+        で足が下・頭が上、前が奥、左が画面左に対応（正規回転、鏡像なし）。
         """
         x, y, z = p
-        return (y, z, -x)
+        return (-y, z, -x)
 
     # ---- データ投入 ----
     def set_frame(self, bones: List[Bone], positions: Dict[str, Vec3]):

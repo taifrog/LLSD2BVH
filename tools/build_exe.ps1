@@ -1,5 +1,5 @@
-#Requires -Version 5.1
-# LLSD2BVH onedir ビルドスクリプト
+﻿#Requires -Version 5.1
+# LLSD2BVH onedir build script
 # Usage: powershell -ExecutionPolicy Bypass -File tools/build_exe.ps1
 #        powershell -ExecutionPolicy Bypass -File tools/build_exe.ps1 -NoZip
 param([switch]$NoZip)
@@ -30,7 +30,7 @@ Write-Host "[build] exe: $exe ($([math]::Round($size,1)) MB)"
 $dirSize = (Get-ChildItem -Recurse "dist\LLSD2BVH" | Measure-Object -Property Length -Sum).Sum / 1MB
 Write-Host "[build] onedir total: $([math]::Round($dirSize,1)) MB"
 
-# 2b. 外部差し替え用に exe 横にも skeleton をコピー（内蔵は _internal 内にある）
+# 2b. Copy skeleton next to exe for override (embedded copy is in _internal)
 $skelSrc = Join-Path $root "avatar_skeleton.xml"
 $skelDst = Join-Path $root "dist\LLSD2BVH\avatar_skeleton.xml"
 if (Test-Path $skelSrc) {
@@ -38,7 +38,7 @@ if (Test-Path $skelSrc) {
     Write-Host "[build] copied avatar_skeleton.xml next to exe for override"
 }
 
-# 3. Zip (任意)
+# 3. Zip (optional)
 if (-not $NoZip) {
     $ver = "0.1.0"
     try {
