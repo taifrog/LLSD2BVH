@@ -1,5 +1,7 @@
 # LLSD2BVH
 
+[English version is here](README.en.md).
+
 Firestorm/Aperture ViewerのPoserでエクスポートしたLLSD XMLポーズファイルから、Second Life/Blender用BVHへの変換ツールです。
 
 ## 前提
