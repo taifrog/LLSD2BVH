@@ -30,9 +30,9 @@ class StickFigureWidget(QWidget):
         # データ
         self._bones: List[Bone] = []
         self._positions: Dict[str, Vec3] = {}
-        # カメラ（Y up に変換後のビュー座標系）
-        self._yaw = 20.0  # deg, Y軸周り
-        self._pitch = -12.0  # deg, X軸周り（上から見下ろし気味）
+        # カメラ（Y up に変換後のビュー座標系、既定は正面）
+        self._yaw = 180.0  # deg, Y軸周り（正面）
+        self._pitch = 0.0  # deg, X軸周り
         self._distance = 2.0  # モデル中心からの距離（m単位想定、前より手前）
         self._center: Vec3 = (0.0, 0.9, 0.0)  # モデル中央（自動算出で更新）
         self._pan_x = 0.0
@@ -110,11 +110,11 @@ class StickFigureWidget(QWidget):
         if yaw is not None:
             self._yaw = yaw
         else:
-            self._yaw = 20.0
+            self._yaw = 180.0  # 正面
         if pitch is not None:
             self._pitch = pitch
         else:
-            self._pitch = -12.0
+            self._pitch = 0.0
         self._pan_x = 0.0
         self._pan_y = 0.0
         self.update()
