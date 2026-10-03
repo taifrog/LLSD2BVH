@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """GUI版 LLSD→BVH 変換ツール (PySide6)。
 
-- 入力最大20件、ドラッグ＆ドロップ＋順序入替可
+- 入力最大100件、ドラッグ＆ドロップ＋順序入替可
 - タイムライン（横）で各ポーズの実行タイミングを指定、durationからFrameTimeを算出
 - 変換核は bvh_writer/euler_math を共用
 """
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 try:
@@ -25,7 +26,7 @@ except ImportError as e:
 from .llsd_parser import parse_llsd_xml
 from .skeleton import load_skeleton, filter_skeleton
 from .bvh_writer import write_bvh_frames
-from .timeline import compute_timeline_frames, insertion_mid_time, MIN_FRAME_TIME, MAX_DURATION
+from .timeline import compute_timeline_frames, insertion_mid_time, MIN_FRAME_TIME, MAX_DURATION, loop_closure_frames, split_frames, part_filename
 from .widgets.timeline_view import TimelineView
 from .i18n import tr, DEFAULT
 try:
@@ -36,7 +37,8 @@ except Exception:
     _HAS_VIEWER = False
 
 
-MAX_FILES = 20
+MAX_FILES = 100
+MAX_SPLIT_SEC = 60.0
 
 
 class FileListWidget(QListWidget):
@@ -88,7 +90,25 @@ class MainWindow(QMainWindow):
         self.resize(860, 760)
         self._viewer_window = None
         self._last_bvh_path: Path | None = None
+        self._parts_cache: list = []
+        self._parts_key = None
+        self._last_part_paths: list[Path] = []
         self._build_ui()
+        # 永続化の復元（spin/check/出力欄）
+        try:
+            self.spin_overlap.setValue(float(self.settings.value("overlap", 2.0)))
+        except Exception:
+            pass
+        try:
+            self.chk_loop.setChecked(str(self.settings.value("loop", "false")).lower() == "true")
+        except Exception:
+            pass
+        try:
+            out_dir = self.settings.value("outputDir", "")
+            if out_dir:
+                self.edit_output.setText(str(out_dir))
+        except Exception:
+            pass
         self._update_lang_buttons()
         self.retranslateUi()
         self._update_timeline_state()
@@ -188,6 +208,27 @@ class MainWindow(QMainWindow):
         dur_row.addStretch()
         layout.addLayout(dur_row)
 
+        # 分割パラメータ行（重なり＋ループ）
+        split_row = QHBoxLayout()
+        self.lbl_overlap = QLabel()
+        split_row.addWidget(self.lbl_overlap)
+        self.spin_overlap = QDoubleSpinBox()
+        self.spin_overlap.setDecimals(1)
+        self.spin_overlap.setSingleStep(0.1)
+        self.spin_overlap.setRange(0.0, 5.0)
+        self.spin_overlap.setValue(2.0)
+        split_row.addWidget(self.spin_overlap)
+        self.chk_loop = QCheckBox()
+        self.chk_loop.setChecked(False)
+        split_row.addWidget(self.chk_loop)
+        split_row.addStretch()
+        layout.addLayout(split_row)
+
+        # 分割サマリ行
+        self.lbl_split_summary = QLabel()
+        self.lbl_split_summary.setStyleSheet("color: #333; font-weight: bold;")
+        layout.addWidget(self.lbl_split_summary)
+
         # Output
         out_row = QHBoxLayout()
         self.lbl_output = QLabel()
@@ -251,6 +292,12 @@ class MainWindow(QMainWindow):
 
         # Preview / Viewer / Convert / Close
         bottom = QHBoxLayout()
+        self.lbl_part = QLabel()
+        bottom.addWidget(self.lbl_part)
+        self.combo_part = QComboBox()
+        self.combo_part.setEnabled(False)
+        self.combo_part.setMinimumWidth(120)
+        bottom.addWidget(self.combo_part)
         self.btn_preview = QPushButton()
         self.btn_preview.setEnabled(False)
         bottom.addWidget(self.btn_preview)
@@ -279,6 +326,9 @@ class MainWindow(QMainWindow):
         self.btn_convert.clicked.connect(self.on_convert)
         self.btn_close.clicked.connect(self.close)
         self.edit_output.textChanged.connect(self._update_preview_button)
+        self.spin_overlap.valueChanged.connect(self._on_split_param_changed)
+        self.chk_loop.stateChanged.connect(self._on_split_param_changed)
+        self.combo_part.currentIndexChanged.connect(self._on_part_preview_changed)
         self.spin_duration.valueChanged.connect(self._on_duration_changed)
         self.timeline_view.timeChanged.connect(self._on_timeline_changed)
         self.list_widget.itemSelectionChanged.connect(self._update_copy_button_state)
@@ -316,13 +366,13 @@ class MainWindow(QMainWindow):
         self.lbl_lang.setText(tr("lang_label", self.lang))
         self.btn_ja.setText(tr("btn_ja", self.lang))
         self.btn_en.setText(tr("btn_en", self.lang))
-        self.lbl_input.setText(tr("input_label", self.lang))
+        self.lbl_input.setText(tr("input_label_max", self.lang, max=MAX_FILES))
         self.lbl_timeline.setText(tr("timeline_label", self.lang))
         self.lbl_anim.setText(tr("anim_time", self.lang))
         self.spin_duration.setSuffix(tr("sec_suffix", self.lang))
         self.lbl_max.setText(tr("max_sec", self.lang, max=int(MAX_DURATION)))
         self.lbl_output.setText(tr("output_label", self.lang))
-        self.edit_output.setPlaceholderText(tr("output_placeholder", self.lang))
+        self.edit_output.setPlaceholderText(tr("output_dir_placeholder", self.lang))
         self.btn_browse_out.setText(tr("btn_browse", self.lang))
         self.lbl_skeleton.setText(tr("skeleton_label", self.lang))
         self.edit_skeleton.setPlaceholderText(tr("skeleton_placeholder", self.lang))
@@ -344,7 +394,7 @@ class MainWindow(QMainWindow):
         self.btn_add.setText(tr("btn_add", self.lang))
         self.btn_remove.setText(tr("btn_remove", self.lang))
         self.btn_copy.setText(tr("btn_copy", self.lang))
-        self.btn_copy.setToolTip(tr("btn_copy_tip", self.lang))
+        self.btn_copy.setToolTip(tr("btn_copy_tip_max", self.lang, max=MAX_FILES))
         self.btn_clear.setText(tr("btn_clear", self.lang))
         self.btn_preview.setText(tr("btn_preview", self.lang))
         self.btn_preview.setToolTip(tr("btn_preview_tip", self.lang))
@@ -353,6 +403,10 @@ class MainWindow(QMainWindow):
         self.btn_viewer.setEnabled(bool(_HAS_VIEWER))
         self.btn_convert.setText(tr("btn_convert", self.lang))
         self.btn_close.setText(tr("btn_close", self.lang))
+        self.lbl_overlap.setText(tr("overlap_label", self.lang))
+        self.chk_loop.setText(tr("loop_check", self.lang))
+        self.lbl_part.setText(tr("part_label", self.lang))
+        self._update_split_summary()
         self.label_computed.setStyleSheet("color: #333; font-weight: bold;")
         # zoom controls
         self.btn_zoom_out.setText(tr("zoom_out", self.lang))
@@ -771,9 +825,81 @@ class MainWindow(QMainWindow):
                     scaled.append((p, float(nt)))
             self.timeline_view.set_items(scaled)
         self._update_computed_label()
+        self._update_split_summary()
+
+    @staticmethod
+    def _estimate_bounds(duration: float, max_sec: float, overlap: float) -> list[tuple[float, float]]:
+        """S/E境界の推定（split_framesの時刻進行と同一式、フレーム不要の軽量版）。"""
+        ov = max(0.0, float(overlap))
+        if ov >= max_sec:
+            ov = max_sec / 2.0
+        bounds: list[tuple[float, float]] = []
+        start = 0.0
+        while True:
+            end = min(start + max_sec, float(duration))
+            bounds.append((start, end))
+            if end >= float(duration) - 1e-6:
+                break
+            start = end - ov
+        return bounds
+
+    def _split_params_key(self):
+        items = self.timeline_view.get_items()
+        return (
+            float(self.spin_duration.value()),
+            float(self.spin_overlap.value()),
+            bool(self.chk_loop.isChecked()),
+            tuple((str(p), float(t)) for p, t in items),
+        )
+
+    def _update_split_summary(self) -> None:
+        """分割サマリ行を更新する（params変更時は推定、変換後は実績）。"""
+        if not hasattr(self, "lbl_split_summary"):
+            return
+        key = self._split_params_key() if hasattr(self, "timeline_view") else None
+        if key is not None and self._parts_key == key and self._parts_cache:
+            bounds = [(s, e) for s, e, _ in self._parts_cache]
+        elif key is not None and len(key[3]) >= 2:
+            dur, _, _, _ = key[0], key[1], key[2], key[3]
+            ov = key[1]
+            if key[2]:
+                # ループ時は閉包分を見込む（k算出はdt依存のため概算：重なり秒を加算）
+                dur = dur + ov
+            bounds = self._estimate_bounds(dur, MAX_SPLIT_SEC, ov)
+        else:
+            self.lbl_split_summary.setText(tr("split_summary_none", self.lang))
+            return
+        parts_txt = "/".join(f"{e - s:.1f}s" for s, e in bounds)
+        self.lbl_split_summary.setText(
+            tr("split_summary", self.lang, n=len(bounds), parts=parts_txt, ov=float(self.spin_overlap.value()))
+        )
+
+    def _on_split_param_changed(self, *_args) -> None:
+        try:
+            self.settings.setValue("overlap", float(self.spin_overlap.value()))
+        except Exception:
+            pass
+        try:
+            self.settings.setValue("loop", "true" if self.chk_loop.isChecked() else "false")
+        except Exception:
+            pass
+        try:
+            self.timeline_view.set_overlap_sec(float(self.spin_overlap.value()))
+        except Exception:
+            pass
+        self._parts_key = None
+        self._update_split_summary()
+
+    def _on_part_preview_changed(self, idx: int) -> None:
+        if idx < 0 or idx >= len(self._last_part_paths):
+            return
+        target = self._last_part_paths[idx]
+        if target.exists():
+            self._open_viewer_window(target)
 
     def _on_timeline_changed(self):
         self._update_computed_label()
+        self._update_split_summary()
 
     def _on_list_reordered(self, *args):
         self._refresh_list_numbers()
@@ -1046,9 +1172,14 @@ class MainWindow(QMainWindow):
         self._update_computed_label()
 
     def on_browse_out(self):
-        path, _ = QFileDialog.getSaveFileName(self, tr("dialog_output_bvh", self.lang), "", tr("filter_bvh", self.lang))
+        cur = self.edit_output.text().strip()
+        path = QFileDialog.getExistingDirectory(self, tr("dialog_output_dir", self.lang), cur)
         if path:
             self.edit_output.setText(path)
+            try:
+                self.settings.setValue("outputDir", path)
+            except Exception:
+                pass
 
     def on_browse_skel(self):
         path, _ = QFileDialog.getOpenFileName(self, tr("dialog_skeleton", self.lang), "", tr("filter_xml", self.lang))
@@ -1125,14 +1256,23 @@ class MainWindow(QMainWindow):
             key_times = [float(t) for _, t in timeline_items]  # dt..D
             # duration と整合（先頭は dt、末尾は D）
             # 呼出側で Tpose を除外して計算するため、key_times は dt..D のまま
+            overlap = float(self.spin_overlap.value())
+            use_loop = bool(self.chk_loop.isChecked())
+            # 出力はフォルダ指定（未指定時は先頭ファイル名＋_split/）
             if out_text:
-                out_path = Path(out_text)
+                out_dir = Path(out_text)
             else:
-                out_path = inputs[0].parent / (inputs[0].stem + "_concatenated.bvh")
+                out_dir = inputs[0].parent / (inputs[0].stem + "_split")
+            out_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                self.settings.setValue("outputDir", str(out_dir))
+            except Exception:
+                pass
+            basename = inputs[0].stem
             self.progress.setVisible(True)
             self.progress.setMaximum(count + 2)
             self.progress.setValue(0)
-            self.log_msg(tr("log_start_timeline", self.lang, n=count, d=duration, p=str(out_path)))
+            self.log_msg(tr("log_start_timeline", self.lang, n=count, d=duration, p=str(out_dir)))
             try:
                 bones = load_skeleton(skel_path)
                 bones = filter_skeleton(bones, include_face=include_face, include_tail=include_tail, include_hands=include_hands)
@@ -1146,15 +1286,42 @@ class MainWindow(QMainWindow):
                 frame_time, frames_user, inserted = compute_timeline_frames(duration, keyframes_data, key_times)
                 if frame_time < MIN_FRAME_TIME:
                     frame_time = MIN_FRAME_TIME
+                frames_work = frames_user
+                duration_eff = duration
+                if use_loop:
+                    closed = loop_closure_frames(frames_user, frame_time, overlap)
+                    added_k = len(closed) - len(frames_user)
+                    duration_eff = duration + added_k * frame_time
+                    self.log_msg(tr("log_loop_closed", self.lang, k=added_k, d=duration_eff))
+                    frames_work = closed
                 tpose_frame: dict = {}
-                frames = [tpose_frame] + frames_user
-                self.log_msg(tr("log_timeline_info", self.lang, d=duration, dt=frame_time, uf=len(frames_user), ins=inserted, tf=len(frames)))
+                self.log_msg(tr("log_timeline_info", self.lang, d=duration_eff, dt=frame_time, uf=len(frames_user), ins=inserted, tf=len(frames_work) + 1))
+                parts = split_frames(frames_work, frame_time, duration_eff, max_sec=MAX_SPLIT_SEC, overlap_sec=overlap)
+                self._parts_cache = parts
+                self._parts_key = self._split_params_key()
+                parts_txt = "/".join(f"{e - s:.1f}s" for s, e, _ in parts)
+                self.log_msg(tr("log_split_info", self.lang, n=len(parts), parts=parts_txt))
                 self.log_msg(tr("log_hierarchy", self.lang, n=len(bones)))
-                write_bvh_frames(frames, bones, out_path, frame_time=frame_time, units=units, sl_compat=False, include_face=include_face, include_tail=include_tail)
-                self._last_bvh_path = Path(out_path)
+                self.progress.setMaximum(count + len(parts) + 1)
+                self._last_part_paths = []
+                for i, (s, e, pf) in enumerate(parts):
+                    out_path = out_dir / part_filename(basename, i, len(parts))
+                    write_bvh_frames([tpose_frame] + list(pf), bones, out_path, frame_time=frame_time, units=units, sl_compat=False, include_face=include_face, include_tail=include_tail)
+                    self._last_part_paths.append(Path(out_path))
+                    self.progress.setValue(count + 1 + i)
+                    self.log_msg(tr("log_part_done", self.lang, t=datetime.now().strftime("%H:%M:%S"), name=out_path.name))
+                self._last_bvh_path = self._last_part_paths[0] if self._last_part_paths else None
+                try:
+                    self.combo_part.blockSignals(True)
+                    self.combo_part.clear()
+                    self.combo_part.addItems([p.name for p in self._last_part_paths])
+                    self.combo_part.setCurrentIndex(0)
+                    self.combo_part.setEnabled(bool(self._last_part_paths))
+                finally:
+                    self.combo_part.blockSignals(False)
                 self._update_preview_button()
-                self.log_msg(tr("log_done", self.lang, p=str(out_path), frames=len(frames), dt=frame_time))
-                QMessageBox.information(self, tr("msg_done_title", self.lang), tr("msg_done_body", self.lang, path=str(out_path), frames=len(frames), dt=frame_time, interp=inserted))
+                self._update_split_summary()
+                QMessageBox.information(self, tr("msg_done_title", self.lang), tr("msg_done_split", self.lang, dir=str(out_dir), n=len(parts), parts=parts_txt))
             except Exception as e:
                 import traceback
                 traceback.print_exc()

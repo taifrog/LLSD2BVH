@@ -363,3 +363,21 @@ def split_frames(
             break
         start = end - overlap
     return parts
+
+
+def part_filename(basename: str, index: int, total: int) -> str:
+    """分割partの出力ファイル名を返す。
+
+    ``<basename>_part01.bvh`` 形式。2桁ゼロパディング、part数が10超の場合は
+    3桁に自動拡張する。
+
+    Args:
+        basename: 先頭入力の stem。
+        index: 0-based の part 番号。
+        total: part 総数。
+
+    Returns:
+        ``<basename>_partNN.bvh`` 形式のファイル名。
+    """
+    width = 3 if total > 10 else 2
+    return f"{basename}_part{index + 1:0{width}d}.bvh"

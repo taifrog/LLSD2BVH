@@ -8,7 +8,8 @@ from pathlib import Path
 
 from .llsd_parser import parse_llsd_xml
 from .skeleton import load_skeleton, filter_skeleton
-from .bvh_writer import write_bvh
+from .bvh_writer import write_bvh, write_bvh_frames
+from .timeline import compute_timeline_frames, loop_closure_frames, split_frames, part_filename
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -25,7 +26,84 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--frame-time", type=float, default=0.0333333, help="Frame Time (default: 0.0333333)")
     p.add_argument("--include-hands", action="store_true", help="手ボーンを含める（デフォルトは除外）")
     p.add_argument("--no-hands", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--total-duration", type=float, default=5.0, help="マスター秒数 (--concat用, default: 5.0)")
+    p.add_argument("--max-split", type=float, default=60.0, help="1part上限秒数 (default: 60.0, 当面固定)")
+    p.add_argument("--overlap", type=float, default=2.0, help="part境界の重なり秒数 (default: 2.0)")
+    p.add_argument("--loop", action="store_true", help="ループ閉包: 先頭ポーズを末尾に追記")
+    p.add_argument("--concat", action="store_true", help="入力群を連結→自動分割して複数BVH出力")
     return p
+
+
+def _run_concat(args: argparse.Namespace, inputs: list[Path], bones, include_hands: bool) -> int:
+    """入力群を連結→自動分割して複数BVH出力する。"""
+    from datetime import datetime
+    duration = float(args.total_duration)
+    overlap = float(args.overlap)
+    max_split = float(args.max_split)
+    keyframes_data = []
+    for inp in inputs:
+        if not inp.exists():
+            print(f"skip: {inp} が存在しません", file=sys.stderr)
+            continue
+        try:
+            keyframes_data.append(parse_llsd_xml(inp))
+        except Exception as e:
+            print(f"error: {inp} のパースに失敗: {e}", file=sys.stderr)
+            continue
+    if not keyframes_data:
+        print("error: 有効な入力がありません。", file=sys.stderr)
+        return 2
+    n = len(keyframes_data)
+    key_times = [i * duration / (n - 1) for i in range(n)] if n > 1 else [0.0]
+    try:
+        frame_time, frames_user, _ = compute_timeline_frames(duration, keyframes_data, key_times)
+    except Exception as e:
+        print(f"error: タイムライン算出に失敗: {e}", file=sys.stderr)
+        return 2
+    frames_work = frames_user
+    duration_eff = duration
+    if args.loop:
+        closed = loop_closure_frames(frames_user, frame_time, overlap)
+        duration_eff = duration + (len(closed) - len(frames_user)) * frame_time
+        print(f"  loop closure: +{len(closed) - len(frames_user)} frames (D'={duration_eff:.2f}s)")
+        frames_work = closed
+    try:
+        parts = split_frames(frames_work, frame_time, duration_eff, max_sec=max_split, overlap_sec=overlap)
+    except Exception as e:
+        print(f"error: 分割に失敗: {e}", file=sys.stderr)
+        return 2
+    out_arg = Path(args.output) if args.output else None
+    if out_arg is not None and (out_arg.is_dir() or not out_arg.suffix):
+        out_dir = out_arg
+    elif out_arg is not None:
+        out_dir = out_arg.parent
+    else:
+        out_dir = inputs[0].parent / (inputs[0].stem + "_split")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    basename = inputs[0].stem
+    # --no-sl-compat が指定されたら False で上書き、--sl-compat が指定されたら True、未指定は None で自動
+    eff_sl_compat = args.sl_compat
+    if getattr(args, "no_sl_compat", False):
+        eff_sl_compat = False
+    tpose: dict = {}
+    for i, (s, e, pf) in enumerate(parts):
+        out_path = out_dir / part_filename(basename, i, len(parts))
+        try:
+            write_bvh_frames(
+                [tpose] + list(pf),
+                bones,
+                out_path,
+                frame_time=frame_time,
+                units=args.units,
+                sl_compat=eff_sl_compat,
+                include_face=False,
+                include_tail=False,
+            )
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] {out_path.name} written ({s:.1f}-{e:.1f}s)")
+        except Exception as e:
+            print(f"error: {out_path} の書き出しに失敗: {e}", file=sys.stderr)
+            return 2
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -90,6 +168,9 @@ def main(argv: list[str] | None = None) -> int:
     if not inputs:
         print("error: 入力が見つかりません。", file=sys.stderr)
         return 2
+
+    if args.concat:
+        return _run_concat(args, inputs, bones, include_hands)
 
     # 出力解決
     out_arg = Path(args.output) if args.output else None
