@@ -1,18 +1,21 @@
 # -*- coding: utf-8 -*-
 """タイムライン・補間ロジック。
 
-- duration (0 < D <= 60), 最小フレームタイム 0.01
+- duration (0 < D <= 600), 最小フレームタイム 0.01
 - t0=0, t_last=D 強制
 - Slerp による回転補間、位置は lerp
 """
 from __future__ import annotations
 
+import logging
 import math
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+logger = logging.getLogger(__name__)
+
 MIN_FRAME_TIME = 0.01
-MAX_DURATION = 60.0
+MAX_DURATION = 600.0
 EPS = 1e-6
 UNIFORM_EPS = 1e-4
 
@@ -163,7 +166,7 @@ def compute_timeline_frames(
     """タイムラインから均一フレーム列を算出。
 
     Args:
-        duration: アニメーション秒数 (<=60)
+        duration: アニメーション秒数 (<=600)
         keyframes_data: 長さNのDictリスト
         key_times: 長さNの時刻リスト（0<=t<=duration、ソート済み、t0=0,t_last=D強制済みを想定）
 
@@ -266,3 +269,97 @@ def compute_timeline_frames(
 
     num_inserted = len(frames) - n
     return (dt, frames, num_inserted)
+
+
+def loop_closure_frames(frames: list[dict], dt: float, loop_sec: float) -> list[dict]:
+    """ループ閉包のため先頭フレームの複製を末尾に追記する。
+
+    追記後の総時間は ``D' = D + k*dt``（``k = round(loop_sec/dt)``）。
+    追記は参照複製であり、フレーム内容の再補間は行わない。
+
+    Args:
+        frames: 均一間隔フレーム列。
+        dt: フレーム間隔（秒）。0以下は不可。
+        loop_sec: 閉包に使う先頭区間の秒数。0以下や丸め結果k=0の場合は追記なし。
+
+    Returns:
+        追記後の新しいフレーム列（入力は変更しない）。
+
+    Raises:
+        ValueError: framesが空、またはdtが0以下の場合。
+    """
+    if not frames:
+        raise ValueError("no frames")
+    if dt <= 0:
+        raise ValueError(f"invalid dt: {dt}")
+    k = int(round(float(loop_sec) / dt)) if loop_sec > 0 else 0
+    if k <= 0:
+        return list(frames)
+    k = min(k, len(frames))
+    closed: list[dict] = list(frames)
+    closed.extend(frames[:k])
+    return closed
+
+
+def split_frames(
+    frames: list[dict],
+    dt: float,
+    duration: float,
+    max_sec: float = 60.0,
+    overlap_sec: float = 2.0,
+) -> list[tuple[float, float, list[dict]]]:
+    """均一フレーム列をSL制限内に収まる複数partへ分割する。
+
+    ``S_0 = 0``、``E_i = S_i + max_sec``、``S_{i+1} = E_i - overlap`` で
+    境界を進め、最終partは ``E = min(S + max_sec, duration)`` で打ち切る
+    （短くてもそのまま出し、吸収合併はしない）。均一格子前提のため
+    境界は ``i0 = round(S/dt)``、``i1 = round(E/dt)`` で切り、重なり区間の
+    フレームは両partに参照複製する（再補間なし＝完全一致）。
+
+    Args:
+        frames: 均一間隔フレーム列。
+        dt: フレーム間隔（秒）。0以下は不可。
+        duration: マスターの総秒数。
+        max_sec: 1partの上限秒数。0以下は不可。
+        overlap_sec: part境界の重なり秒数。``max_sec``以上の場合は
+            ``max_sec/2`` にクランプして警告する。負値は0扱い。
+            0の場合は無重なり（境界1フレームのみ共有）。
+
+    Returns:
+        ``[(S_i, E_i, part_frames)]`` のリスト。``S_0 = 0``、最終 ``E`` は
+        ``duration`` に等しい。
+
+    Raises:
+        ValueError: framesが空、dt・max_secが0以下、durationが負の場合。
+    """
+    if not frames:
+        raise ValueError("no frames")
+    if dt <= 0:
+        raise ValueError(f"invalid dt: {dt}")
+    if max_sec <= 0:
+        raise ValueError(f"invalid max_sec: {max_sec}")
+    if duration < 0:
+        raise ValueError(f"invalid duration: {duration}")
+    overlap = float(overlap_sec)
+    if overlap < 0:
+        overlap = 0.0
+    if overlap >= max_sec:
+        overlap = max_sec / 2.0
+        logger.warning(
+            "overlap_sec (%s) >= max_sec (%s); clamped to %s",
+            overlap_sec, max_sec, overlap,
+        )
+    n = len(frames)
+    parts: list[tuple[float, float, list[dict]]] = []
+    start = 0.0
+    while True:
+        end = min(start + max_sec, float(duration))
+        i0 = int(round(start / dt))
+        i1 = int(round(end / dt))
+        i0 = max(0, min(i0, n - 1))
+        i1 = max(i0, min(i1, n - 1))
+        parts.append((start, end, frames[i0:i1 + 1]))
+        if end >= float(duration) - EPS:
+            break
+        start = end - overlap
+    return parts
