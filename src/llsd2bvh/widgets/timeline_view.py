@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""タイムライン横表示ウィジェット（左端ピン＋縦ずらし＋番号）."""
+"""タイムライン横表示ウィジェット（ファイル毎1レーン＋分割線＋重なり帯）."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,15 +11,15 @@ from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QFontMetrics, Q
 
 BLOCK_W = 96
 BLOCK_H = 36
+LANE_H = 44
+HEADER_W = 132
 TIMELINE_H = 22
 PADDING_L = 10
 PADDING_R = 10
 PADDING_TOP = 8
 PADDING_BOTTOM = 6
-ROW_GAP = 8
 PIN_W = 10
 PIN_H = 7
-GAP_X = 6  # 重なり判定の余白
 
 # Zoom: 100%〜400%、±50%刻み
 ZOOM_MIN = 1.0
@@ -33,6 +33,8 @@ _BLOCK_FILL = QColor(100, 160, 240)
 _BLOCK_FIXED = QColor(70, 130, 210)
 _BLOCK_TEXT = QColor(255, 255, 255)
 _BLOCK_BORDER = QColor(40, 90, 170)
+_SPLIT_LINE = QColor(220, 60, 60)
+_OVERLAP_BAND = QColor(240, 200, 60, 90)
 
 _DEFAULT_TOOLTIP = "ドラッグで時刻を移動、ダブルクリックで数値入力（先頭0s/末尾durationは固定）／空所をドラッグで左右スクロール／ホイールで拡大縮小"
 
@@ -81,9 +83,11 @@ class TimelineView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(110)
-        self.setMaximumHeight(150)
+        # 最大高さの上限は設けない（100レーン時は親QScrollAreaの縦スクロールに任せる）
         self.setMouseTracking(True)
         self._duration = 5.0
+        self._split_sec = 60.0
+        self._overlap_sec = 2.0
         self._items: List[Tuple[Path, float]] = []
         self._number_map: Dict[str, int] = {}
         self._ordered_paths: List[Path] = []
@@ -98,8 +102,45 @@ class TimelineView(QWidget):
         self.setToolTip(self._default_tooltip)
 
     def set_duration(self, v: float):
-        self._duration = max(0.1, min(60.0, v))
+        self._duration = max(0.1, min(600.0, v))
         self.update()
+
+    def split_sec(self) -> float:
+        """分割線の間隔（秒）。"""
+        return self._split_sec
+
+    def set_split_sec(self, v: float) -> None:
+        """分割線の間隔を設定する。
+
+        Args:
+            v: 秒数。正でなければ無視する。
+        """
+        if v is None or float(v) <= 0:
+            return
+        self._split_sec = float(v)
+        self.update()
+
+    def overlap_sec(self) -> float:
+        """重なり帯の秒数。"""
+        return self._overlap_sec
+
+    def set_overlap_sec(self, v: float) -> None:
+        """重なり帯の秒数を設定する。
+
+        Args:
+            v: 秒数。負値は0扱いにする。
+        """
+        self._overlap_sec = max(0.0, float(v))
+        self.update()
+
+    def split_markers(self) -> List[float]:
+        """分割線の時刻リスト（duration未満の split_sec 刻み）。"""
+        marks: List[float] = []
+        m = self._split_sec
+        while m < self._duration - 1e-9:
+            marks.append(m)
+            m += self._split_sec
+        return marks
 
     def duration(self) -> float:
         return self._duration
@@ -208,58 +249,42 @@ class TimelineView(QWidget):
             new_items[-1] = (new_items[-1][0], float(self._duration))
         self._items = new_items
 
+    def _lane_x0(self) -> int:
+        return PADDING_L + HEADER_W
+
+    def _lane_y(self, lane: int) -> int:
+        return PADDING_TOP + TIMELINE_H + 6 + lane * LANE_H
+
     def _time_to_x(self, t: float, width: int) -> int:
-        avail = width - PADDING_L - PADDING_R - BLOCK_W
+        x0 = self._lane_x0()
+        avail = width - x0 - PADDING_R - BLOCK_W
         if self._duration <= 1e-9 or avail <= 0:
-            return PADDING_L
+            return x0
         frac = max(0.0, min(1.0, t / self._duration))
-        return int(PADDING_L + frac * avail)
+        return int(x0 + frac * avail)
 
     def _x_to_time(self, x: int, width: int) -> float:
-        avail = width - PADDING_L - PADDING_R - BLOCK_W
+        x0 = self._lane_x0()
+        avail = width - x0 - PADDING_R - BLOCK_W
         if avail <= 0:
             return 0.0
-        frac = (x - PADDING_L) / avail
+        frac = (x - x0) / avail
         frac = max(0.0, min(1.0, frac))
         return frac * self._duration
-
-    def _compute_rows(self, items: List[Tuple[Path, float]], width: int) -> List[int]:
-        """重なりを縦ずらし: 同一行でXが重なる場合は別行へ。2段のみ。"""
-        rows: List[int] = []
-        xs: List[int] = [self._time_to_x(t, width) for _, t in items]
-        for i, x in enumerate(xs):
-            # 試す行: 0→1
-            chosen = 0
-            for try_row in (0, 1):
-                overlap = False
-                for j in range(i):
-                    if rows[j] == try_row and x < xs[j] + BLOCK_W + GAP_X and xs[j] < x + BLOCK_W + GAP_X:
-                        overlap = True
-                        break
-                if not overlap:
-                    chosen = try_row
-                    break
-                # 両行とも重なる場合ははみ出しを許容（要件4: はみ出し表示不可でOK）
-                chosen = try_row
-            rows.append(chosen)
-        return rows
 
     def _hit_test(self, pos: QPoint) -> int | None:
         w = self.width()
         items = self.get_items()
         if not items:
             return None
-        rows = self._compute_rows(items, w)
         for idx, (p, t) in enumerate(items):
             x = self._time_to_x(t, w)
-            row = rows[idx]
-            y = PADDING_TOP + TIMELINE_H + 6 + row * (BLOCK_H + ROW_GAP)
-            rect = QRect(x, y, BLOCK_W, BLOCK_H)
+            rect = QRect(x, self._lane_y(idx) + (LANE_H - BLOCK_H) // 2, BLOCK_W, BLOCK_H)
             if rect.contains(pos):
                 return idx
             # ピン部分もヒット
             y_line = PADDING_TOP + TIMELINE_H // 2 + 4
-            pin_rect = QRect(x - PIN_W, y_line, PIN_W * 2, y - y_line)
+            pin_rect = QRect(x - PIN_W, y_line, PIN_W * 2, self._lane_y(idx) - y_line)
             if pin_rect.contains(pos):
                 return idx
         return None
@@ -272,17 +297,22 @@ class TimelineView(QWidget):
 
         y_line = PADDING_TOP + TIMELINE_H // 2 + 4
         painter.setPen(QPen(_LINE, 2))
-        # 左端基準のため線は PADDING_L から w-PADDING_R-BLOCK_W まで
-        painter.drawLine(PADDING_L, y_line, w - PADDING_R - BLOCK_W, y_line)
+        # レーン見出し分を空けた範囲に軸を引く
+        x0 = self._lane_x0()
+        painter.drawLine(x0, y_line, w - PADDING_R - BLOCK_W, y_line)
 
-        # ticks
+        # ticks（600秒まで対応）
         painter.setPen(QPen(_TICK, 1))
         if self._duration <= 10:
             step = 1.0
         elif self._duration <= 30:
             step = 5.0
-        else:
+        elif self._duration <= 120:
             step = 10.0
+        elif self._duration <= 300:
+            step = 30.0
+        else:
+            step = 60.0
         fm = QFontMetrics(self.font())
         t = 0.0
         while t <= self._duration + 1e-9:
@@ -306,19 +336,36 @@ class TimelineView(QWidget):
         items = self.get_items()
         if not items:
             return
-        rows = self._compute_rows(items, w)
-        # 必要高さを動的に反映（2段時は高く）
-        max_row = max(rows) if rows else 0
-        needed_h = PADDING_TOP + TIMELINE_H + 6 + (max_row + 1) * (BLOCK_H + ROW_GAP) + PADDING_BOTTOM
+        # 必要高さを動的に反映（1レーン約44px、上限なし＝親スクロールに任せる）
+        needed_h = PADDING_TOP + TIMELINE_H + 6 + len(items) * LANE_H + PADDING_BOTTOM
         if needed_h != self.minimumHeight():
             self.setMinimumHeight(max(110, needed_h))
-            self.setMaximumHeight(max(150, needed_h))
+        lanes_bottom = PADDING_TOP + TIMELINE_H + 6 + len(items) * LANE_H
+
+        # 重なり帯（黄）→分割線（赤破線）の順に描画
+        for m in self.split_markers():
+            if self._overlap_sec > 0:
+                bx0 = self._time_to_x(max(0.0, m - self._overlap_sec), w)
+                bx1 = self._time_to_x(m, w)
+                painter.fillRect(QRect(bx0, y_line - 6, max(1, bx1 - bx0), lanes_bottom - (y_line - 6)), _OVERLAP_BAND)
+            mx = self._time_to_x(m, w)
+            painter.setPen(QPen(_SPLIT_LINE, 1, Qt.DashLine))
+            painter.drawLine(mx, y_line - 6, mx, lanes_bottom)
+            painter.setPen(QPen(_TICK, 1))
 
         for idx, (p, t) in enumerate(items):
             x = self._time_to_x(t, w)
-            row = rows[idx]
+            lane_y = self._lane_y(idx)
             rect_x = x
-            rect_y = PADDING_TOP + TIMELINE_H + 6 + row * (BLOCK_H + ROW_GAP)
+            rect_y = lane_y + (LANE_H - BLOCK_H) // 2
+            # レーン見出し＝LLSDファイル名（A/B/C表記なし、中間省略）
+            painter.setPen(QColor(40, 40, 40))
+            hfont = QFont(self.font())
+            hfont.setPointSize(8)
+            painter.setFont(hfont)
+            hfm = QFontMetrics(hfont)
+            head_label = elide_middle_label("", p.stem, HEADER_W - 12, hfm.horizontalAdvance)
+            painter.drawText(PADDING_L + 4, lane_y + (LANE_H + hfm.ascent() - hfm.descent()) // 2, head_label)
             is_fixed = (idx == 0 or idx == len(items) - 1) and len(items) >= 2
             is_hover = (idx == self._hover_idx)
             is_drag = (idx == self._drag_idx)

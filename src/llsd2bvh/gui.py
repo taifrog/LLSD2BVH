@@ -157,13 +157,12 @@ class MainWindow(QMainWindow):
         self.timeline_scroll = QScrollArea()
         self.timeline_scroll.setWidgetResizable(False)
         self.timeline_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.timeline_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.timeline_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.timeline_scroll.setFrameShape(QScrollArea.NoFrame)
         # 初期幅はviewportに合わせる（zoom=1.0でフィット）
         self.timeline_scroll.setWidget(self.timeline_view)
-        # 高さはTimelineViewの2段分を収める（110〜150）＋スクロール枠分
+        # 高さはTimelineViewのレーン数で伸びる（上限なし＝縦スクロールに任せる）
         self.timeline_scroll.setMinimumHeight(132)
-        self.timeline_scroll.setMaximumHeight(164)
         layout.addWidget(self.timeline_scroll)
         # ホイールはviewportが先に受けるため、filterでTimelineViewへ中継（Ctrl不要でズーム）
         try:
