@@ -304,6 +304,28 @@ class TimelineView(QWidget):
             return (None, None)
 
     @staticmethod
+    def _ev_point(event):
+        """イベント位置をQPointで返す（pos()非推奨対応）。"""
+        get = getattr(event, "position", None)
+        if callable(get):
+            try:
+                return get().toPoint()
+            except Exception:
+                pass
+        return event.pos()
+
+    @staticmethod
+    def _ev_global(event):
+        """イベント大域位置をQPointで返す（globalPos()非推奨対応）。"""
+        get = getattr(event, "globalPosition", None)
+        if callable(get):
+            try:
+                return get().toPoint()
+            except Exception:
+                pass
+        return event.globalPos()
+
+    @staticmethod
     def _bar_can_scroll(bar) -> bool:
         """スクロールバーがスクロール可能かを返す。"""
         try:
@@ -505,7 +527,7 @@ class TimelineView(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            idx = self._hit_test(event.pos())
+            idx = self._hit_test(self._ev_point(event))
             if idx is not None:
                 if len(self.get_items()) >= 2 and (idx == 0 or idx == len(self.get_items()) - 1):
                     return
@@ -513,7 +535,7 @@ class TimelineView(QWidget):
                 w = self.width()
                 p, t = self.get_items()[idx]
                 x = self._time_to_x(t, w)
-                self._drag_offset = event.pos().x() - x
+                self._drag_offset = self._ev_point(event).x() - x
                 self.setCursor(Qt.ClosedHandCursor)
                 return
             # 空所 左ドラッグでパン開始（縦横スクロールバーを連動）
@@ -522,12 +544,8 @@ class TimelineView(QWidget):
             if self._bar_can_scroll(hs) or self._bar_can_scroll(vs):
                 self._panning = True
                 # global座標で追従（widgetがスクロールしてもズレない）
-                try:
-                    self._pan_start_x = int(event.globalPosition().x())
-                    self._pan_start_y = int(event.globalPosition().y())
-                except AttributeError:
-                    self._pan_start_x = int(event.globalPos().x())
-                    self._pan_start_y = int(event.globalPos().y())
+                self._pan_start_x = self._ev_global(event).x()
+                self._pan_start_y = self._ev_global(event).y()
                 self._pan_start_scroll = hs.value() if hs is not None else 0
                 self._pan_start_vscroll = vs.value() if vs is not None else 0
                 self.setCursor(Qt.ClosedHandCursor)
@@ -537,14 +555,9 @@ class TimelineView(QWidget):
     def mouseMoveEvent(self, event):
         # パン中は最優先（1:1追従、加速なし。縦横とも連動）
         if self._panning and event.buttons() & Qt.LeftButton:
-            try:
-                cur_x = int(event.globalPosition().x())
-                cur_y = int(event.globalPosition().y())
-            except AttributeError:
-                cur_x = int(event.globalPos().x())
-                cur_y = int(event.globalPos().y())
-            dx = self._pan_start_x - cur_x
-            dy = self._pan_start_y - cur_y
+            gp = self._ev_global(event)
+            dx = self._pan_start_x - gp.x()
+            dy = self._pan_start_y - gp.y()
             sa = self._get_scroll_area()
             hs, vs = self._pan_bars(sa)
             if hs is not None:
@@ -554,7 +567,7 @@ class TimelineView(QWidget):
             event.accept()
             return
         w = self.width()
-        h_idx = self._hit_test(event.pos())
+        h_idx = self._hit_test(self._ev_point(event))
         if h_idx != self._hover_idx:
             self._hover_idx = h_idx
             # ブロック別ツールチップ: フル名＋時刻。空所では既定文言に戻す
@@ -570,7 +583,7 @@ class TimelineView(QWidget):
                 self.setToolTip(self._default_tooltip)
             self.update()
         if self._drag_idx is not None and event.buttons() & Qt.LeftButton:
-            new_x = event.pos().x() - self._drag_offset
+            new_x = self._ev_point(event).x() - self._drag_offset
             new_t = self._x_to_time(new_x, w)
             items = self.get_items()  # リスト順
             eps = 0.05
@@ -586,7 +599,7 @@ class TimelineView(QWidget):
             self._items[self._drag_idx] = (p, float(new_t))
             self.timeChanged.emit()
             self.update()
-            self._auto_scroll_for_drag(event.pos())
+            self._auto_scroll_for_drag(self._ev_point(event))
         else:
             if self._drag_idx is None and h_idx is not None:
                 if len(self.get_items()) >= 2 and (h_idx == 0 or h_idx == len(self.get_items()) - 1):
@@ -619,7 +632,7 @@ class TimelineView(QWidget):
             self.update()
 
     def mouseDoubleClickEvent(self, event):
-        idx = self._hit_test(event.pos())
+        idx = self._hit_test(self._ev_point(event))
         if idx is None:
             return
         items = self.get_items()  # リスト順

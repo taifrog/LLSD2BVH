@@ -1,0 +1,69 @@
+/* LLSD2BVH dark theme (mockup v05 layout-preview.html) */
+QMainWindow, QWidget {
+    background-color: #1e1e1e;
+    color: #e0e0e0;
+}
+QLabel {
+    color: #e0e0e0;
+}
+QPushButton {
+    background-color: #3c3c3c;
+    color: #e0e0e0;
+    border: 1px solid #555555;
+    border-radius: 4px;
+    padding: 4px 9px;
+}
+QPushButton:hover {
+    border-color: #0e639c;
+}
+QPushButton:disabled {
+    color: #9a9a9a;
+}
+QPushButton:checked {
+    background-color: #0e639c;
+    border-color: #0e639c;
+}
+QLineEdit, QComboBox, QDoubleSpinBox, QSpinBox, QTextEdit {
+    background-color: #3c3c3c;
+    color: #e0e0e0;
+    border: 1px solid #555555;
+    border-radius: 4px;
+    padding: 3px 6px;
+}
+QListWidget {
+    background-color: #2d2d2d;
+    color: #e0e0e0;
+    border: 1px solid #454545;
+    border-radius: 4px;
+}
+QListWidget::item:selected {
+    background-color: #0e639c;
+}
+QScrollArea {
+    border: 1px solid #3c3c3c;
+    border-radius: 4px;
+    background-color: #1e1e1e;
+}
+QScrollBar:horizontal, QScrollBar:vertical {
+    background: #2d2d2d;
+}
+QSplitter::handle {
+    background-color: #3c3c3c;
+}
+QProgressBar {
+    border: 1px solid #3c3c3c;
+    border-radius: 4px;
+    background-color: #2d2d2d;
+    color: #b5cea8;
+}
+QProgressBar::chunk {
+    background-color: #0e639c;
+}
+QSlider::groove:horizontal {
+    background: #3c3c3c;
+}
+QToolTip {
+    background-color: #2d2d2d;
+    color: #e0e0e0;
+    border: 1px solid #555555;
+}

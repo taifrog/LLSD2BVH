@@ -43,6 +43,32 @@ MAX_FILES = 100
 MAX_SPLIT_SEC = 60.0
 
 
+def load_dark_stylesheet(base_dir=None) -> bool:
+    """ダークテーマQSSを適用する。
+
+    読込失敗時は無視して起動する（Falseを返す）。言語切替には影響しない。
+
+    Args:
+        base_dir: dark.qss探索起点。省略時は本ファイル所在ディレクトリ。
+
+    Returns:
+        適用に成功したら True。
+    """
+    try:
+        from PySide6.QtWidgets import QApplication
+        root = Path(base_dir) if base_dir else Path(__file__).parent
+        qss_path = root / "dark.qss"
+        text = qss_path.read_text(encoding="utf-8")
+        app = QApplication.instance()
+        if app is None:
+            return False
+        app.setStyleSheet(text)
+        return True
+    except Exception as e:
+        print(f"dark.qss load skipped: {e}")
+        return False
+
+
 class FileListWidget(QListWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1500,6 +1526,7 @@ class MainWindow(QMainWindow):
 
 def main(argv=None):
     app = QApplication(sys.argv if argv is None else [sys.argv[0]] + (argv or []))
+    load_dark_stylesheet()
     win = MainWindow()
     win.show()
     return app.exec()
