@@ -16,7 +16,7 @@ try:
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QListWidget, QListWidgetItem, QPushButton, QLabel, QLineEdit,
         QComboBox, QDoubleSpinBox, QCheckBox, QFileDialog, QMessageBox,
-        QProgressBar, QTextEdit, QScrollArea
+        QProgressBar, QTextEdit, QScrollArea, QSplitter
     )
     from PySide6.QtCore import Qt, QMimeData, QUrl, QSettings, QEvent
 except ImportError as e:
@@ -31,9 +31,11 @@ from .widgets.timeline_view import TimelineView
 from .i18n import tr, DEFAULT
 try:
     from .viewer.viewer_window import BvhViewerWindow
+    from .viewer.preview_panel import PreviewPanel
     _HAS_VIEWER = True
 except Exception:
     BvhViewerWindow = None  # type: ignore
+    PreviewPanel = None  # type: ignore
     _HAS_VIEWER = False
 
 
@@ -132,13 +134,41 @@ class MainWindow(QMainWindow):
         lang_row.addWidget(self.btn_ja)
         lang_row.addWidget(self.btn_en)
         lang_row.addStretch()
+        self.btn_fold_preview = QPushButton()
+        self.btn_fold_preview.setCheckable(True)
+        self.btn_fold_preview.setChecked(True)
+        self.btn_fold_preview.toggled.connect(self._on_fold_preview)
+        lang_row.addWidget(self.btn_fold_preview)
         layout.addLayout(lang_row)
+
+        # 3ペイン＋右プレビュー（G-2組替え：既存部品を移設、新規生成は枠のみ）
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.pane_left = QWidget()
+        self.left_layout = QVBoxLayout(self.pane_left)
+        self.left_layout.setContentsMargins(0, 0, 0, 0)
+        self.pane_mid = QWidget()
+        self.mid_layout = QVBoxLayout(self.pane_mid)
+        self.mid_layout.setContentsMargins(0, 0, 0, 0)
+        self.pane_right = QWidget()
+        self.right_layout = QVBoxLayout(self.pane_right)
+        self.right_layout.setContentsMargins(0, 0, 0, 0)
+        self.splitter.addWidget(self.pane_left)
+        self.splitter.addWidget(self.pane_mid)
+        self.splitter.addWidget(self.pane_right)
+        self.splitter.setStretchFactor(0, 20)
+        self.splitter.setStretchFactor(1, 60)
+        self.splitter.setStretchFactor(2, 20)
+        try:
+            self.splitter.splitterMoved.connect(self._on_splitter_moved)
+        except Exception:
+            pass
+        layout.addWidget(self.splitter, stretch=1)
 
         # Input list
         self.lbl_input = QLabel()
-        layout.addWidget(self.lbl_input)
+        self.left_layout.addWidget(self.lbl_input)
         self.list_widget = FileListWidget()
-        layout.addWidget(self.list_widget, stretch=2)
+        self.left_layout.addWidget(self.list_widget, stretch=2)
 
         btn_row = QHBoxLayout()
         self.btn_add = QPushButton()
@@ -151,7 +181,7 @@ class MainWindow(QMainWindow):
         for b in [self.btn_add, self.btn_remove, self.btn_copy, self.btn_up, self.btn_down, self.btn_clear]:
             btn_row.addWidget(b)
         btn_row.addStretch()
-        layout.addLayout(btn_row)
+        self.left_layout.addLayout(btn_row)
 
         # Timeline header with zoom controls (- + reset + pct)
         timeline_header = QHBoxLayout()
@@ -171,7 +201,7 @@ class MainWindow(QMainWindow):
         timeline_header.addWidget(self.btn_zoom_in)
         timeline_header.addWidget(self.btn_zoom_reset)
         timeline_header.addWidget(self.lbl_zoom_pct)
-        layout.addLayout(timeline_header)
+        self.mid_layout.addLayout(timeline_header)
         # Timeline viewport (GUIサイズ固定＋横スクロールで拡大表示)
         self.timeline_view = TimelineView()
         self.timeline_scroll = QScrollArea()
@@ -183,7 +213,7 @@ class MainWindow(QMainWindow):
         self.timeline_scroll.setWidget(self.timeline_view)
         # 高さはTimelineViewのレーン数で伸びる（上限なし＝縦スクロールに任せる）
         self.timeline_scroll.setMinimumHeight(132)
-        layout.addWidget(self.timeline_scroll)
+        self.mid_layout.addWidget(self.timeline_scroll)
         # ホイールはviewportが先に受けるため、filterでTimelineViewへ中継（Ctrl不要でズーム）
         try:
             self.timeline_scroll.viewport().installEventFilter(self)
@@ -206,7 +236,7 @@ class MainWindow(QMainWindow):
         self.label_computed.setStyleSheet("color: #333; font-weight: bold;")
         dur_row.addWidget(self.label_computed)
         dur_row.addStretch()
-        layout.addLayout(dur_row)
+        self.left_layout.addLayout(dur_row)
 
         # 分割パラメータ行（重なり＋ループ）
         split_row = QHBoxLayout()
@@ -222,12 +252,12 @@ class MainWindow(QMainWindow):
         self.chk_loop.setChecked(False)
         split_row.addWidget(self.chk_loop)
         split_row.addStretch()
-        layout.addLayout(split_row)
+        self.left_layout.addLayout(split_row)
 
         # 分割サマリ行
         self.lbl_split_summary = QLabel()
         self.lbl_split_summary.setStyleSheet("color: #333; font-weight: bold;")
-        layout.addWidget(self.lbl_split_summary)
+        self.mid_layout.addWidget(self.lbl_split_summary)
 
         # Output
         out_row = QHBoxLayout()
@@ -237,7 +267,7 @@ class MainWindow(QMainWindow):
         self.btn_browse_out = QPushButton()
         out_row.addWidget(self.edit_output, stretch=1)
         out_row.addWidget(self.btn_browse_out)
-        layout.addLayout(out_row)
+        self.mid_layout.addLayout(out_row)
 
         # Options grid
         opt_row1 = QHBoxLayout()
@@ -247,7 +277,7 @@ class MainWindow(QMainWindow):
         self.btn_browse_skel = QPushButton()
         opt_row1.addWidget(self.edit_skeleton, stretch=1)
         opt_row1.addWidget(self.btn_browse_skel)
-        layout.addLayout(opt_row1)
+        self.left_layout.addLayout(opt_row1)
 
         opt_row2 = QHBoxLayout()
         self.lbl_units = QLabel()
@@ -272,23 +302,23 @@ class MainWindow(QMainWindow):
         opt_row2.addWidget(self.spin_frame)
         opt_row2.addWidget(self._label_frame_suffix)
         opt_row2.addStretch()
-        layout.addLayout(opt_row2)
+        self.left_layout.addLayout(opt_row2)
 
         opt_row3 = QHBoxLayout()
         self.chk_no_hands = QCheckBox()
         self.chk_no_hands.setChecked(True)
         opt_row3.addWidget(self.chk_no_hands)
         opt_row3.addStretch()
-        layout.addLayout(opt_row3)
+        self.left_layout.addLayout(opt_row3)
 
         # Progress & log
         self.progress = QProgressBar()
         self.progress.setVisible(False)
-        layout.addWidget(self.progress)
+        self.mid_layout.addWidget(self.progress)
         self.log = QTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumHeight(120)
-        layout.addWidget(self.log)
+        self.mid_layout.addWidget(self.log)
 
         # Preview / Viewer / Convert / Close
         bottom = QHBoxLayout()
@@ -310,7 +340,15 @@ class MainWindow(QMainWindow):
         self.btn_close = QPushButton()
         bottom.addWidget(self.btn_convert)
         bottom.addWidget(self.btn_close)
-        layout.addLayout(bottom)
+        self.mid_layout.addLayout(bottom)
+
+        # 右ペイン：内蔵プレビュー（G-1部品）
+        if PreviewPanel is not None:
+            self.preview_panel = PreviewPanel(lang=self.lang, parent=self.pane_right)
+        else:
+            self.preview_panel = None
+        if self.preview_panel is not None:
+            self.right_layout.addWidget(self.preview_panel)
 
         # connections
         self.btn_add.clicked.connect(self.on_add)
@@ -417,8 +455,90 @@ class MainWindow(QMainWindow):
         self.btn_zoom_reset.setToolTip(tr("zoom_tip_reset", self.lang))
         # wheel hint as tooltip on zoom label
         self.lbl_zoom_pct.setToolTip(tr("zoom_tip_wheel", self.lang))
+        self._update_fold_button()
+        if self.preview_panel is not None:
+            self.preview_panel.set_language(self.lang)
         self._update_zoom_ui()
         self._update_preview_button()
+
+    # --- 右ペイン折畳み＋QSplitter記憶 ---
+    def _splitter_sizes_key(self) -> str:
+        """QSettingsのQSplitterサイズ格納キー。"""
+        return "splitterSizes"
+
+    def _on_splitter_moved(self, *_args) -> None:
+        """QSplitter移動時にサイズを記憶する。"""
+        try:
+            self.settings.setValue(self._splitter_sizes_key(), self.splitter.sizes())
+        except Exception:
+            pass
+
+    @staticmethod
+    def _default_sizes(total: int) -> list:
+        """初期比20/60/20のサイズ配分。"""
+        left = int(total * 0.2)
+        mid = int(total * 0.6)
+        return [left, mid, max(0, total - left - mid)]
+
+    def _apply_initial_splitter_sizes(self) -> None:
+        """初回表示時にQSplitter比を復元（不正時は20/60/20）。"""
+        total = max(100, self.splitter.width())
+        sizes = self._default_sizes(total)
+        try:
+            saved = self.settings.value(self._splitter_sizes_key(), None)
+            if isinstance(saved, (list, tuple)) and len(saved) == 3:
+                vals = [int(v) for v in saved]
+                if all(v >= 0 for v in vals) and sum(vals) > 0:
+                    sizes = vals
+        except Exception:
+            pass
+        try:
+            folded = str(self.settings.value("previewFolded", "false")).lower() == "true"
+        except Exception:
+            folded = False
+        try:
+            self.btn_fold_preview.blockSignals(True)
+            self.btn_fold_preview.setChecked(not folded)
+        finally:
+            self.btn_fold_preview.blockSignals(False)
+        self.pane_right.setVisible(not folded)
+        try:
+            self.splitter.setSizes(sizes if not folded else [sizes[0], sizes[1], 0])
+        except Exception:
+            pass
+
+    def _on_fold_preview(self, checked: bool) -> None:
+        """折畳みトグル。開閉状態とサイズを記憶する。"""
+        try:
+            if not checked:
+                self.settings.setValue(self._splitter_sizes_key(), self.splitter.sizes())
+                self.settings.setValue("previewFolded", "true")
+                self.pane_right.setVisible(False)
+            else:
+                self.settings.setValue("previewFolded", "false")
+                self.pane_right.setVisible(True)
+                self._apply_initial_splitter_sizes()
+        except Exception:
+            pass
+        self._update_fold_button()
+
+    def _ensure_preview_visible(self) -> None:
+        """右ペインが畳まれていれば開く。"""
+        if not self.pane_right.isVisible():
+            try:
+                self.btn_fold_preview.blockSignals(True)
+                self.btn_fold_preview.setChecked(True)
+            finally:
+                self.btn_fold_preview.blockSignals(False)
+            self._on_fold_preview(True)
+
+    def _update_fold_button(self) -> None:
+        """折畳みボタンの表示を更新する。"""
+        is_open = self.pane_right.isVisible()
+        if self.lang == "ja":
+            self.btn_fold_preview.setText("◀ プレビュー" if is_open else "プレビュー ▶")
+        else:
+            self.btn_fold_preview.setText("Hide Preview" if is_open else "Preview ▶")
 
     # --- preview helpers ---
     def _update_preview_button(self):
@@ -432,31 +552,15 @@ class MainWindow(QMainWindow):
         self.btn_preview.setEnabled(bool(has and _HAS_VIEWER))
 
     def _open_viewer_window(self, target: Path | None):
-        if not _HAS_VIEWER:
+        """内蔵プレビューパネルへ誘導する（別窓は開かない）。"""
+        if not _HAS_VIEWER or self.preview_panel is None:
             QMessageBox.warning(self, tr("msg_error_title", self.lang), "Viewer not available")
             return
         try:
-            if self._viewer_window is None or not hasattr(self._viewer_window, "isVisible"):
-                self._viewer_window = BvhViewerWindow(initial_path=target, lang=self.lang, parent=self)
-            else:
-                try:
-                    if not self._viewer_window.isVisible():
-                        if target is not None:
-                            self._viewer_window.load_bvh(target)
-                    else:
-                        if target is not None:
-                            self._viewer_window.load_bvh(target)
-                except RuntimeError:
-                    self._viewer_window = BvhViewerWindow(initial_path=target, lang=self.lang, parent=self)
-                    if target is not None:
-                        self._viewer_window.load_bvh(target)
-            self._viewer_window.show()
-            self._viewer_window.raise_()
-            self._viewer_window.activateWindow()
-            if target is not None and target != self._last_bvh_path:
-                # on_preview経由なら再読込保証（空ビューアからの再利用時）
-                if not self._viewer_window.isVisible():
-                    self._viewer_window.load_bvh(target)
+            self._ensure_preview_visible()
+            if target is not None and Path(target).exists():
+                self._last_bvh_path = Path(target)
+                self.preview_panel.load_bvh(target)
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -480,10 +584,20 @@ class MainWindow(QMainWindow):
         self._open_viewer_window(target)
 
     def on_viewer(self):
-        # 任意BVH表示: 空で開き、既存なら前面化のみ（ファイル選択はビューア側の[開く]/DnDで）
-        target = None
-        # 変換済みBVHがあれば初期表示に使わない（空で開く仕様）。previewと区別する。
-        self._open_viewer_window(target)
+        # 単独Viewer互換：空の別窓で開く（ファイル選択はビューア側の[開く]/DnDで）
+        if not _HAS_VIEWER:
+            QMessageBox.warning(self, tr("msg_error_title", self.lang), "Viewer not available")
+            return
+        try:
+            if self._viewer_window is None or not hasattr(self._viewer_window, "isVisible"):
+                self._viewer_window = BvhViewerWindow(initial_path=None, lang=self.lang, parent=self)
+            self._viewer_window.show()
+            self._viewer_window.raise_()
+            self._viewer_window.activateWindow()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, tr("msg_error_title", self.lang), f"Preview failed:\n{e}")
 
     # --- zoom helpers (GUIサイズ固定＋中央維持＋自動スクロール) ---
     def _update_zoom_ui(self):
@@ -576,6 +690,7 @@ class MainWindow(QMainWindow):
             from PySide6.QtCore import QTimer
             QTimer.singleShot(0, self._update_timeline_zoom_width)
             QTimer.singleShot(0, self._update_zoom_ui)
+            QTimer.singleShot(0, self._apply_initial_splitter_sizes)
         except Exception:
             pass
 
@@ -891,11 +1006,16 @@ class MainWindow(QMainWindow):
         self._update_split_summary()
 
     def _on_part_preview_changed(self, idx: int) -> None:
+        """part切替ComboBox→内蔵Panelへ直接配線。"""
         if idx < 0 or idx >= len(self._last_part_paths):
+            return
+        if self.preview_panel is None:
             return
         target = self._last_part_paths[idx]
         if target.exists():
-            self._open_viewer_window(target)
+            self._ensure_preview_visible()
+            self._last_bvh_path = target
+            self.preview_panel.load_bvh(target)
 
     def _on_timeline_changed(self):
         self._update_computed_label()
