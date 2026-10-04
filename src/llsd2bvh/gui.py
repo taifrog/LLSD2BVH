@@ -56,9 +56,28 @@ def load_dark_stylesheet(base_dir=None) -> bool:
     """
     try:
         from PySide6.QtWidgets import QApplication
-        root = Path(base_dir) if base_dir else Path(__file__).parent
-        qss_path = root / "dark.qss"
-        text = qss_path.read_text(encoding="utf-8")
+        cands: list[Path] = []
+        if base_dir:
+            cands.append(Path(base_dir) / "dark.qss")
+        else:
+            if getattr(sys, 'frozen', False):
+                exe_dir = Path(sys.executable).parent
+                meipass = Path(getattr(sys, '_MEIPASS', exe_dir))
+                cands += [
+                    meipass / "llsd2bvh" / "dark.qss",
+                    exe_dir / "_internal" / "llsd2bvh" / "dark.qss",
+                    exe_dir / "dark.qss",
+                ]
+            cands.append(Path(__file__).parent / "dark.qss")
+        text = None
+        for qss_path in cands:
+            try:
+                text = qss_path.read_text(encoding="utf-8")
+                break
+            except Exception:
+                continue
+        if text is None:
+            return False
         app = QApplication.instance()
         if app is None:
             return False

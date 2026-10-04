@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llsd2bvh"
-version = "0.4.1"
+version = "0.5.0"
 description = "Firestorm Poser LLSD XML to BVH converter"
 readme = "README.md"
 requires-python = ">=3.9"

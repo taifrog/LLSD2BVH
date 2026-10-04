@@ -2,13 +2,13 @@
 # PyInstaller spec for LLSD2BVH GUI (onedir, windowed)
 # Build: pyinstaller LLSD2BVH.spec  or  powershell -ExecutionPolicy Bypass -File tools/build_exe.ps1
 
-datas = [('avatar_skeleton.xml', '.')]
+datas = [('avatar_skeleton.xml', '.'), ('src/llsd2bvh/dark.qss', 'llsd2bvh')]
 binaries = []
 hiddenimports = [
     'PySide6.QtXml',
     'llsd2bvh.llsd_parser', 'llsd2bvh.skeleton', 'llsd2bvh.bvh_writer', 'llsd2bvh.euler_math',
     'llsd2bvh.timeline', 'llsd2bvh.widgets.timeline_view', 'llsd2bvh.i18n',
-    'llsd2bvh.viewer', 'llsd2bvh.viewer.bvh_parser', 'llsd2bvh.viewer.fk', 'llsd2bvh.viewer.gl_widget', 'llsd2bvh.viewer.viewer_window',
+    'llsd2bvh.viewer', 'llsd2bvh.viewer.bvh_parser', 'llsd2bvh.viewer.fk', 'llsd2bvh.viewer.gl_widget', 'llsd2bvh.viewer.viewer_window', 'llsd2bvh.viewer.preview_panel',
 ]
 
 a = Analysis(
