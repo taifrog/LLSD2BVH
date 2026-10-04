@@ -34,7 +34,29 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _relay_timeline_warnings():
+    """llsd2bvh.timelineの警告をprintへ中継するハンドラ。"""
+    import logging
+
+    class _Relay(logging.Handler):
+        def emit(self, record) -> None:
+            print(f"warn: {record.getMessage()}", file=sys.stderr)
+
+    handler = _Relay(level=logging.WARNING)
+    logging.getLogger("llsd2bvh.timeline").addHandler(handler)
+    return handler
+
+
 def _run_concat(args: argparse.Namespace, inputs: list[Path], bones, include_hands: bool) -> int:
+    _relay = _relay_timeline_warnings()
+    try:
+        return _run_concat_inner(args, inputs, bones, include_hands)
+    finally:
+        import logging
+        logging.getLogger("llsd2bvh.timeline").removeHandler(_relay)
+
+
+def _run_concat_inner(args: argparse.Namespace, inputs: list[Path], bones, include_hands: bool) -> int:
     """入力群を連結→自動分割して複数BVH出力する。"""
     from datetime import datetime
     duration = float(args.total_duration)
@@ -81,10 +103,9 @@ def _run_concat(args: argparse.Namespace, inputs: list[Path], bones, include_han
         out_dir = inputs[0].parent / (inputs[0].stem + "_split")
     out_dir.mkdir(parents=True, exist_ok=True)
     basename = inputs[0].stem
-    # --no-sl-compat が指定されたら False で上書き、--sl-compat が指定されたら True、未指定は None で自動
-    eff_sl_compat = args.sl_compat
-    if getattr(args, "no_sl_compat", False):
-        eff_sl_compat = False
+    # F-1: [tpose]+内容＋sl_compat=False固定（自動判定を使わない）。
+    if args.sl_compat or getattr(args, "no_sl_compat", False):
+        print("warn: --sl-compat/--no-sl-compat はF-1統一により無視されます", file=sys.stderr)
     tpose: dict = {}
     for i, (s, e, pf) in enumerate(parts):
         out_path = out_dir / part_filename(basename, i, len(parts))
@@ -95,7 +116,7 @@ def _run_concat(args: argparse.Namespace, inputs: list[Path], bones, include_han
                 out_path,
                 frame_time=frame_time,
                 units=args.units,
-                sl_compat=eff_sl_compat,
+                sl_compat=False,
                 include_face=False,
                 include_tail=False,
             )
@@ -202,18 +223,19 @@ def main(argv: list[str] | None = None) -> int:
             if out_path.is_dir():
                 out_path = out_path / (inp.stem + ".bvh")
 
-        # --no-sl-compat が指定されたら False で上書き、--sl-compat が指定されたら True、未指定は None で自動
-        eff_sl_compat = args.sl_compat
-        if getattr(args, "no_sl_compat", False):
-            eff_sl_compat = False
+        # F-1: [tpose]+内容＋sl_compat=False固定（自動判定を使わない）。
+        # 旧--sl-compat/--no-sl-compatは受付のみで出力には反映されない。
+        if args.sl_compat or getattr(args, "no_sl_compat", False):
+            print("warn: --sl-compat/--no-sl-compat はF-1統一により無視されます", file=sys.stderr)
+        tpose: dict = {}
         try:
-            write_bvh(
-                joints_data=data,
-                bones=bones,
-                out_path=out_path,
+            write_bvh_frames(
+                [tpose, data],
+                bones,
+                out_path,
                 frame_time=args.frame_time,
                 units=args.units,
-                sl_compat=eff_sl_compat,
+                sl_compat=False,
                 include_face=False,
                 include_tail=False,
             )

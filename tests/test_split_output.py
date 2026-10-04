@@ -63,8 +63,7 @@ def test_concat_default_outdir(tmp_path, capsys):
                "--concat", "--total-duration", "61", "-o", str(out)])
     assert rc == 0
     assert (out / "testChange03_part01.bvh").exists()
-    assert (out / "testChange03_part02.bvh").exists()
     wins = _printed_windows(capsys)
-    assert wins == [(0.0, 60.0), (58.0, 61.0)]
-    for s, e in wins:
-        assert e - s <= 60.0 + 1e-6
+    # V-4: part02 [58,61]は新規格子indexなし→落とす。part01[0,60]のみ残る
+    assert wins == [(0.0, 60.0)]
+    assert not (out / "testChange03_part02.bvh").exists()

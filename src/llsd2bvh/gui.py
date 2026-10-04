@@ -1286,14 +1286,29 @@ class MainWindow(QMainWindow):
                 frame_time, frames_user, inserted = compute_timeline_frames(duration, keyframes_data, key_times)
                 if frame_time < MIN_FRAME_TIME:
                     frame_time = MIN_FRAME_TIME
-                frames_work = frames_user
-                duration_eff = duration
-                if use_loop:
-                    closed = loop_closure_frames(frames_user, frame_time, overlap)
-                    added_k = len(closed) - len(frames_user)
-                    duration_eff = duration + added_k * frame_time
-                    self.log_msg(tr("log_loop_closed", self.lang, k=added_k, d=duration_eff))
-                    frames_work = closed
+                import logging as _logging
+                _warn_records: list[str] = []
+
+                class _GuiWarnRelay(_logging.Handler):
+                    def emit(_self, record) -> None:
+                        _warn_records.append(record.getMessage())
+
+                _warn_handler = _GuiWarnRelay(level=_logging.WARNING)
+                _logging.getLogger("llsd2bvh.timeline").addHandler(_warn_handler)
+                try:
+                    frames_work = frames_user
+                    duration_eff = duration
+                    if use_loop:
+                        closed = loop_closure_frames(frames_user, frame_time, overlap)
+                        added_k = len(closed) - len(frames_user)
+                        duration_eff = duration + added_k * frame_time
+                        self.log_msg(tr("log_loop_closed", self.lang, k=added_k, d=duration_eff))
+                        frames_work = closed
+                    parts = split_frames(frames_work, frame_time, duration_eff, max_sec=MAX_SPLIT_SEC, overlap_sec=overlap)
+                finally:
+                    _logging.getLogger("llsd2bvh.timeline").removeHandler(_warn_handler)
+                for _w in _warn_records:
+                    self.log_msg(f"warn: {_w}")
                 tpose_frame: dict = {}
                 self.log_msg(tr("log_timeline_info", self.lang, d=duration_eff, dt=frame_time, uf=len(frames_user), ins=inserted, tf=len(frames_work) + 1))
                 parts = split_frames(frames_work, frame_time, duration_eff, max_sec=MAX_SPLIT_SEC, overlap_sec=overlap)

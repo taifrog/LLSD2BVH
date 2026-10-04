@@ -62,6 +62,9 @@ def split_frames(
 - `overlap >= max_sec` は `max_sec/2` にクランプして警告。
 - `overlap=0` は無重なり（境界共有1フレームのみ）。
 
+- F-2（2026-10-04追記）: 新規格子index（当該partの `[i0..i1]` が既出partの最大indexを超えるもの）を含まないpartは返さない。先頭partは常時保持。落としたpartの `(S,E)` は `logger.warning`＋呼出側ログに記録する。
+- 命名（2026-10-04追記）: `part_filename(basename, index, total)` が `<basename>_part01.bvh` 形式を返す。2桁ゼロパディング、part数10超は3桁に自動拡張。
+
 ### 3.3 GUI状態
 
 - `total_duration: float`、`overlap_sec: float`、`loop_enabled: bool`、`output_dir: Path`。
@@ -89,6 +92,9 @@ def split_frames(
 | フレーム0件 | 呼出直後 | `ValueError`（既存踏襲） |
 | 1〜2件入力 | 均一化側 | 既存どおり（dt=D/(n-1)）、分割は通常適用 |
 | 最終part極短 | 分割末尾 | そのまま出力（合併しない） |
+| 縮退part（新規格子なし） | `split_frames` | 返さない（先頭partは保持）。`(S,E)` を警告ログに記録 |
+| 疎dt（`dt > overlap`） | `split_frames`先頭 | 警告ログ（重なり内に格子点なしの可能性） |
+| ループ追記k=0 | `loop_closure_frames` | 警告ログ（閉包効果なし）。追記なし |
 | 出力フォルダ未指定 | GUI | 先頭ファイル名＋`_split/`に自動作成 |
 | 100件超 | 追加時 | 追加拒否＋メッセージ（既存20件制限の拡張版） |
 

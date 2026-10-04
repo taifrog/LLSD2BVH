@@ -294,6 +294,11 @@ def loop_closure_frames(frames: list[dict], dt: float, loop_sec: float) -> list[
         raise ValueError(f"invalid dt: {dt}")
     k = int(round(float(loop_sec) / dt)) if loop_sec > 0 else 0
     if k <= 0:
+        if loop_sec > 0:
+            logger.warning(
+                "loop_closure noop: k=round(%s/%s)=0, no frames appended",
+                loop_sec, dt,
+            )
         return list(frames)
     k = min(k, len(frames))
     closed: list[dict] = list(frames)
@@ -327,7 +332,8 @@ def split_frames(
 
     Returns:
         ``[(S_i, E_i, part_frames)]`` のリスト。``S_0 = 0``、最終 ``E`` は
-        ``duration`` に等しい。
+        ``duration`` に等しい。新規格子indexを含まない縮退partは落とす
+        （先頭partは常時保持、落とした場合は警告ログ）。
 
     Raises:
         ValueError: framesが空、dt・max_secが0以下、durationが負の場合。
@@ -349,16 +355,31 @@ def split_frames(
             "overlap_sec (%s) >= max_sec (%s); clamped to %s",
             overlap_sec, max_sec, overlap,
         )
+    if dt > overlap and overlap > 0:
+        logger.warning(
+            "sparse grid: dt (%s) > overlap_sec (%s); overlap may hold no grid points",
+            dt, overlap,
+        )
     n = len(frames)
     parts: list[tuple[float, float, list[dict]]] = []
     start = 0.0
+    max_seen = -1
+    first = True
     while True:
         end = min(start + max_sec, float(duration))
         i0 = int(round(start / dt))
         i1 = int(round(end / dt))
         i0 = max(0, min(i0, n - 1))
         i1 = max(i0, min(i1, n - 1))
-        parts.append((start, end, frames[i0:i1 + 1]))
+        if first or i1 > max_seen:
+            parts.append((start, end, frames[i0:i1 + 1]))
+            max_seen = max(max_seen, i1)
+            first = False
+        else:
+            logger.warning(
+                "dropping degenerate part (S=%.3f, E=%.3f): no new grid index",
+                start, end,
+            )
         if end >= float(duration) - EPS:
             break
         start = end - overlap
