@@ -234,6 +234,20 @@ class PreviewPanel(QWidget):
         else:
             self.btn_play.setText("▶ " + ("Play" if self.lang == "en" else "再生"))
 
+    def attach_part_selector(self, label, combo) -> None:
+        """part選択行（ラベル＋ComboBox）をファイル行の上に配置する。
+
+        所有権・配線は呼出側（MainWindow）が保持する。
+
+        Args:
+            label: part選択ラベル。
+            combo: part選択ComboBox。
+        """
+        row = QHBoxLayout()
+        row.addWidget(label)
+        row.addWidget(combo, stretch=1)
+        self.layout().insertLayout(0, row)
+
     def set_part_paths(self, paths: list[Path]) -> None:
         """part切替用パス群を設定する（読込自体は load_bvh で行う）。
 

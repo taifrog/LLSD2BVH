@@ -117,7 +117,6 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(tr("window_title", self.lang))
         self.resize(860, 760)
         self._viewer_window = None
-        self._last_bvh_path: Path | None = None
         self._parts_cache: list = []
         self._parts_key = None
         self._last_part_paths: list[Path] = []
@@ -140,7 +139,6 @@ class MainWindow(QMainWindow):
         self._update_lang_buttons()
         self.retranslateUi()
         self._update_timeline_state()
-        self._update_preview_button()
 
     def _build_ui(self):
         central = QWidget()
@@ -351,17 +349,8 @@ class MainWindow(QMainWindow):
         self.log.setMaximumHeight(120)
         self.mid_layout.addWidget(self.log)
 
-        # Preview / Viewer / Convert / Close
+        # Preview / Viewer / Convert / Close（プレビューは内蔵Panelへ移行のため下段ボタンなし）
         bottom = QHBoxLayout()
-        self.lbl_part = QLabel()
-        bottom.addWidget(self.lbl_part)
-        self.combo_part = QComboBox()
-        self.combo_part.setEnabled(False)
-        self.combo_part.setMinimumWidth(120)
-        bottom.addWidget(self.combo_part)
-        self.btn_preview = QPushButton()
-        self.btn_preview.setEnabled(False)
-        bottom.addWidget(self.btn_preview)
         self.btn_viewer = QPushButton()
         self.btn_viewer.setEnabled(bool(_HAS_VIEWER))
         bottom.addWidget(self.btn_viewer)
@@ -373,13 +362,20 @@ class MainWindow(QMainWindow):
         bottom.addWidget(self.btn_close)
         self.mid_layout.addLayout(bottom)
 
-        # 右ペイン：内蔵プレビュー（G-1部品）
+        # 右ペイン：内蔵プレビュー（G-1部品）＋part選択行の移設
         if PreviewPanel is not None:
             self.preview_panel = PreviewPanel(lang=self.lang, parent=self.pane_right)
         else:
             self.preview_panel = None
         if self.preview_panel is not None:
             self.right_layout.addWidget(self.preview_panel)
+        # part選択はPreviewPanel上部へ（下段から移動）
+        self.lbl_part = QLabel()
+        self.combo_part = QComboBox()
+        self.combo_part.setEnabled(False)
+        self.combo_part.setMinimumWidth(120)
+        if self.preview_panel is not None:
+            self.preview_panel.attach_part_selector(self.lbl_part, self.combo_part)
 
         # connections
         self.btn_add.clicked.connect(self.on_add)
@@ -390,11 +386,9 @@ class MainWindow(QMainWindow):
         self.btn_clear.clicked.connect(self.on_clear)
         self.btn_browse_out.clicked.connect(self.on_browse_out)
         self.btn_browse_skel.clicked.connect(self.on_browse_skel)
-        self.btn_preview.clicked.connect(self.on_preview)
         self.btn_viewer.clicked.connect(self.on_viewer)
         self.btn_convert.clicked.connect(self.on_convert)
         self.btn_close.clicked.connect(self.close)
-        self.edit_output.textChanged.connect(self._update_preview_button)
         self.spin_overlap.valueChanged.connect(self._on_split_param_changed)
         self.chk_loop.stateChanged.connect(self._on_split_param_changed)
         self.combo_part.currentIndexChanged.connect(self._on_part_preview_changed)
@@ -465,8 +459,6 @@ class MainWindow(QMainWindow):
         self.btn_copy.setText(tr("btn_copy", self.lang))
         self.btn_copy.setToolTip(tr("btn_copy_tip_max", self.lang, max=MAX_FILES))
         self.btn_clear.setText(tr("btn_clear", self.lang))
-        self.btn_preview.setText(tr("btn_preview", self.lang))
-        self.btn_preview.setToolTip(tr("btn_preview_tip", self.lang))
         self.btn_viewer.setText(tr("btn_viewer", self.lang))
         self.btn_viewer.setToolTip(tr("btn_viewer_tip", self.lang))
         self.btn_viewer.setEnabled(bool(_HAS_VIEWER))
@@ -490,9 +482,6 @@ class MainWindow(QMainWindow):
         if self.preview_panel is not None:
             self.preview_panel.set_language(self.lang)
         self._update_zoom_ui()
-        self._update_preview_button()
-
-    # --- 右ペイン折畳み＋QSplitter記憶 ---
     def _splitter_sizes_key(self) -> str:
         """QSettingsのQSplitterサイズ格納キー。"""
         return "splitterSizes"
@@ -571,17 +560,7 @@ class MainWindow(QMainWindow):
         else:
             self.btn_fold_preview.setText("Hide Preview" if is_open else "Preview ▶")
 
-    # --- preview helpers ---
-    def _update_preview_button(self):
-        has = self._last_bvh_path is not None and Path(self._last_bvh_path).exists()
-        # also allow preview if output path exists
-        if not has:
-            out_text = self.edit_output.text().strip() if hasattr(self, "edit_output") else ""
-            if out_text and Path(out_text).exists() and Path(out_text).suffix.lower() == ".bvh":
-                has = True
-                self._last_bvh_path = Path(out_text)
-        self.btn_preview.setEnabled(bool(has and _HAS_VIEWER))
-
+    # --- 右ペイン折畳み＋QSplitter記憶 ---
     def _open_viewer_window(self, target: Path | None):
         """内蔵プレビューパネルへ誘導する（別窓は開かない）。"""
         if not _HAS_VIEWER or self.preview_panel is None:
@@ -590,29 +569,11 @@ class MainWindow(QMainWindow):
         try:
             self._ensure_preview_visible()
             if target is not None and Path(target).exists():
-                self._last_bvh_path = Path(target)
                 self.preview_panel.load_bvh(target)
         except Exception as e:
             import traceback
             traceback.print_exc()
             QMessageBox.critical(self, tr("msg_error_title", self.lang), f"Preview failed:\n{e}")
-
-    def on_preview(self):
-        # Prefer last written, else output field, else ask
-        target = None
-        if self._last_bvh_path and Path(self._last_bvh_path).exists():
-            target = Path(self._last_bvh_path)
-        else:
-            out_text = self.edit_output.text().strip()
-            if out_text and Path(out_text).exists():
-                target = Path(out_text)
-        if target is None or not target.exists():
-            # dialog
-            path, _ = QFileDialog.getOpenFileName(self, tr("dialog_output_bvh", self.lang), "", tr("filter_bvh", self.lang))
-            if not path:
-                return
-            target = Path(path)
-        self._open_viewer_window(target)
 
     def on_viewer(self):
         # 単独Viewer互換：空の別窓で開く（ファイル選択はビューア側の[開く]/DnDで）
@@ -1039,7 +1000,6 @@ class MainWindow(QMainWindow):
         target = self._last_part_paths[idx]
         if target.exists():
             self._ensure_preview_visible()
-            self._last_bvh_path = target
             self.preview_panel.load_bvh(target)
 
     def _on_timeline_changed(self):
@@ -1470,7 +1430,6 @@ class MainWindow(QMainWindow):
                     self._last_part_paths.append(Path(out_path))
                     self.progress.setValue(count + 1 + i)
                     self.log_msg(tr("log_part_done", self.lang, t=datetime.now().strftime("%H:%M:%S"), name=out_path.name))
-                self._last_bvh_path = self._last_part_paths[0] if self._last_part_paths else None
                 try:
                     self.combo_part.blockSignals(True)
                     self.combo_part.clear()
@@ -1483,7 +1442,6 @@ class MainWindow(QMainWindow):
                 if self.preview_panel is not None and self._last_part_paths:
                     self.preview_panel.set_part_paths(self._last_part_paths)
                     self.preview_panel.load_bvh(self._last_part_paths[0])
-                self._update_preview_button()
                 self._update_split_summary()
                 QMessageBox.information(self, tr("msg_done_title", self.lang), tr("msg_done_split", self.lang, dir=str(out_dir), n=len(parts), parts=parts_txt))
             except Exception as e:
@@ -1523,8 +1481,6 @@ class MainWindow(QMainWindow):
                 frames = [tpose_frame] + frames
                 self.log_msg(tr("log_hierarchy", self.lang, n=len(bones)))
                 write_bvh_frames(frames, bones, out_path, frame_time=frame_time, units=units, sl_compat=False, include_face=include_face, include_tail=include_tail)
-                self._last_bvh_path = Path(out_path)
-                self._update_preview_button()
                 self.log_msg(tr("log_done_single", self.lang, p=str(out_path), frames=len(frames), dt=frame_time))
                 QMessageBox.information(self, tr("msg_done_title", self.lang), tr("msg_done_body_single", self.lang, path=str(out_path), frames=len(frames)))
             except Exception as e:
