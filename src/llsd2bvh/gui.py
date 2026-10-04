@@ -617,12 +617,7 @@ class MainWindow(QMainWindow):
             vp_w = self.timeline_scroll.viewport().width()
             if vp_w <= 10:
                 vp_w = max(600, self.timeline_view.width())
-            cur_zoom = self.timeline_view.zoom()
-            new_w = int(vp_w * cur_zoom)
-            if new_w < vp_w:
-                new_w = vp_w
-            self.timeline_view.setMinimumWidth(new_w)
-            self.timeline_view.setMaximumWidth(new_w)
+            self.timeline_view.set_zoom_width(vp_w)
         except Exception:
             pass
 
@@ -644,13 +639,9 @@ class MainWindow(QMainWindow):
             self._update_timeline_zoom_width()
             self._update_zoom_ui()
             return
-        # widthを更新
-        cur_zoom = self.timeline_view.zoom()
-        new_w = int(vp_w * cur_zoom)
-        if new_w < vp_w:
-            new_w = vp_w
-        self.timeline_view.setMinimumWidth(new_w)
-        self.timeline_view.setMaximumWidth(new_w)
+        # widthを更新（上限付き）
+        self.timeline_view.set_zoom_width(vp_w)
+        new_w = self.timeline_view.minimumWidth()
         # 次フレームでスクロールを中央維持（レイアウト反映待ちでも可視的に揃う）
         try:
             # process pending layout

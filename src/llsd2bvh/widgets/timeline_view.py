@@ -14,6 +14,8 @@ BLOCK_H = 36
 LANE_H = 44
 HEADER_W = 132
 TIMELINE_H = 22
+# ズーム幅の上限。超過分は横スクロールで吸収し、ペイン全体の最小幅を押し上げない。
+ZOOM_WIDTH_MAX = 1200
 PADDING_L = 10
 PADDING_R = 10
 PADDING_TOP = 8
@@ -97,7 +99,9 @@ class TimelineView(QWidget):
         self._zoom = 1.0
         self._panning = False
         self._pan_start_x = 0
+        self._pan_start_y = 0
         self._pan_start_scroll = 0
+        self._pan_start_vscroll = 0
         self._default_tooltip = _DEFAULT_TOOLTIP
         self.setToolTip(self._default_tooltip)
 
@@ -252,6 +256,23 @@ class TimelineView(QWidget):
     def _lane_x0(self) -> int:
         return PADDING_L + HEADER_W
 
+    def set_zoom_width(self, vp_w: int) -> None:
+        """ズーム倍率に応じた表示幅を適用する。
+
+        上限 ZOOM_WIDTH_MAX を超える分は横スクロールで吸収し、
+        ペイン全体の最小幅を押し上げない。
+
+        Args:
+            vp_w: スクロール領域の表示幅 (px)。
+        """
+        new_w = int(vp_w * self._zoom)
+        if new_w < vp_w:
+            new_w = vp_w
+        if new_w > ZOOM_WIDTH_MAX:
+            new_w = ZOOM_WIDTH_MAX
+        self.setMinimumWidth(new_w)
+        self.setMaximumWidth(new_w)
+
     def _lane_y(self, lane: int) -> int:
         return PADDING_TOP + TIMELINE_H + 6 + lane * LANE_H
 
@@ -271,6 +292,24 @@ class TimelineView(QWidget):
         frac = (x - x0) / avail
         frac = max(0.0, min(1.0, frac))
         return frac * self._duration
+
+    @staticmethod
+    def _pan_bars(sa):
+        """パン対象のスクロールバー対 (horizontal, vertical) を返す。"""
+        if sa is None:
+            return (None, None)
+        try:
+            return (sa.horizontalScrollBar(), sa.verticalScrollBar())
+        except Exception:
+            return (None, None)
+
+    @staticmethod
+    def _bar_can_scroll(bar) -> bool:
+        """スクロールバーがスクロール可能かを返す。"""
+        try:
+            return bar is not None and bar.maximum() > 0
+        except Exception:
+            return False
 
     def _hit_test(self, pos: QPoint) -> int | None:
         w = self.width()
@@ -477,32 +516,41 @@ class TimelineView(QWidget):
                 self._drag_offset = event.pos().x() - x
                 self.setCursor(Qt.ClosedHandCursor)
                 return
-            # 空所 左ドラッグで横パン開始（スクロールバー左右移動）
+            # 空所 左ドラッグでパン開始（縦横スクロールバーを連動）
             sa = self._get_scroll_area()
-            if sa is not None and sa.horizontalScrollBar().maximum() > 0:
+            hs, vs = self._pan_bars(sa)
+            if self._bar_can_scroll(hs) or self._bar_can_scroll(vs):
                 self._panning = True
-                # global Xで追従（widgetがスクロールしてもズレない）
+                # global座標で追従（widgetがスクロールしてもズレない）
                 try:
                     self._pan_start_x = int(event.globalPosition().x())
+                    self._pan_start_y = int(event.globalPosition().y())
                 except AttributeError:
                     self._pan_start_x = int(event.globalPos().x())
-                self._pan_start_scroll = sa.horizontalScrollBar().value()
+                    self._pan_start_y = int(event.globalPos().y())
+                self._pan_start_scroll = hs.value() if hs is not None else 0
+                self._pan_start_vscroll = vs.value() if vs is not None else 0
                 self.setCursor(Qt.ClosedHandCursor)
                 event.accept()
                 return
 
     def mouseMoveEvent(self, event):
-        # パン中は最優先（1:1追従、加速なし）
+        # パン中は最優先（1:1追従、加速なし。縦横とも連動）
         if self._panning and event.buttons() & Qt.LeftButton:
             try:
                 cur_x = int(event.globalPosition().x())
+                cur_y = int(event.globalPosition().y())
             except AttributeError:
                 cur_x = int(event.globalPos().x())
+                cur_y = int(event.globalPos().y())
             dx = self._pan_start_x - cur_x
+            dy = self._pan_start_y - cur_y
             sa = self._get_scroll_area()
-            if sa is not None:
-                hs = sa.horizontalScrollBar()
+            hs, vs = self._pan_bars(sa)
+            if hs is not None:
                 hs.setValue(max(hs.minimum(), min(hs.maximum(), self._pan_start_scroll + dx)))
+            if vs is not None:
+                vs.setValue(max(vs.minimum(), min(vs.maximum(), self._pan_start_vscroll + dy)))
             event.accept()
             return
         w = self.width()
@@ -549,9 +597,10 @@ class TimelineView(QWidget):
                 if self._panning:
                     self.setCursor(Qt.ClosedHandCursor)
                 else:
-                    # 空所はパン可能を示す（スクロール可能な時のみ）
+                    # 空所はパン可能を示す（縦横どちらかスクロール可能な時のみ）
                     sa = self._get_scroll_area()
-                    if sa is not None and sa.horizontalScrollBar().maximum() > 0:
+                    hs, vs = self._pan_bars(sa)
+                    if self._bar_can_scroll(hs) or self._bar_can_scroll(vs):
                         self.setCursor(Qt.OpenHandCursor)
                     else:
                         self.setCursor(Qt.ArrowCursor)
