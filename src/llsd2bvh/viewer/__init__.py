@@ -19,6 +19,7 @@ __all__ = [
     "lerp_angle_deg",
     "StickFigureWidget",
     "BvhViewerWindow",
+    "PreviewPanel",
 ]
 
 _LAZY_MAP = {
@@ -31,6 +32,7 @@ _LAZY_MAP = {
     "lerp_angle_deg": ("llsd2bvh.viewer.fk", "lerp_angle_deg"),
     "StickFigureWidget": ("llsd2bvh.viewer.gl_widget", "StickFigureWidget"),
     "BvhViewerWindow": ("llsd2bvh.viewer.viewer_window", "BvhViewerWindow"),
+    "PreviewPanel": ("llsd2bvh.viewer.preview_panel", "PreviewPanel"),
 }
 
 if TYPE_CHECKING:
@@ -39,6 +41,7 @@ if TYPE_CHECKING:
     from .fk import compute_all_frames, compute_frame_positions, compute_frame_positions_at_time, lerp_angle_deg  # noqa: F401
     from .gl_widget import StickFigureWidget  # noqa: F401
     from .viewer_window import BvhViewerWindow  # noqa: F401
+    from .preview_panel import PreviewPanel  # noqa: F401
 
 
 def __getattr__(name: str):
