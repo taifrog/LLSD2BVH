@@ -927,13 +927,16 @@ class MainWindow(QMainWindow):
         return paths
 
     def _refresh_list_numbers(self):
+        # 項目表示はstem＋中間省略（固定幅）。フルパス長でsizeHintが膨らまない
+        # ようにする。フルパスはツールチップ表示。
+        fm = self.list_widget.fontMetrics()
         for i in range(self.list_widget.count()):
             item = self.list_widget.item(i)
             full = item.data(Qt.UserRole)
             if not full:
                 continue
-            name = Path(full).name
-            item.setText(f"{i+1}. {name}")
+            stem = Path(full).stem
+            item.setText(f"{i+1}. " + fm.elidedText(stem, Qt.ElideMiddle, 180))
             item.setToolTip(str(full))
 
     def _on_duration_changed(self, _val):
@@ -1471,6 +1474,10 @@ class MainWindow(QMainWindow):
                     self.combo_part.setEnabled(bool(self._last_part_paths))
                 finally:
                     self.combo_part.blockSignals(False)
+                # G-5b: 変換完了時に生成part群をPanelにセットし先頭を自動読込
+                if self.preview_panel is not None and self._last_part_paths:
+                    self.preview_panel.set_part_paths(self._last_part_paths)
+                    self.preview_panel.load_bvh(self._last_part_paths[0])
                 self._update_preview_button()
                 self._update_split_summary()
                 QMessageBox.information(self, tr("msg_done_title", self.lang), tr("msg_done_split", self.lang, dir=str(out_dir), n=len(parts), parts=parts_txt))

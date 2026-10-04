@@ -74,6 +74,23 @@ class PreviewPanel(QWidget):
             self.viewer.setAlignment(Qt.AlignCenter)
         root.addWidget(self.viewer, stretch=1)
 
+        # 視点プリセット（3Dビュー直下。モック配置順）
+        view_row = QHBoxLayout()
+        self.btn_front = QPushButton("正面")
+        self.btn_front.clicked.connect(self._reset_front)
+        view_row.addWidget(self.btn_front)
+        self.btn_side = QPushButton("側面")
+        self.btn_side.clicked.connect(self._reset_side)
+        view_row.addWidget(self.btn_side)
+        self.btn_top = QPushButton("上面")
+        self.btn_top.clicked.connect(self._reset_top)
+        view_row.addWidget(self.btn_top)
+        self.btn_reset_view = QPushButton("リセット")
+        self.btn_reset_view.clicked.connect(self._reset_default)
+        view_row.addWidget(self.btn_reset_view)
+        view_row.addStretch()
+        root.addLayout(view_row)
+
         # 情報行
         info_row = QHBoxLayout()
         self.lbl_info = QLabel("No BVH loaded")
@@ -81,6 +98,10 @@ class PreviewPanel(QWidget):
         info_row.addWidget(self.lbl_info, stretch=1)
         self.lbl_frame = QLabel("- / -")
         self.lbl_frame.setStyleSheet("color: #fff; font-weight: bold;")
+        # 幅固定＋折返し：再生中の値変化で右ライン幅が動かないようにする
+        self.lbl_frame.setFixedWidth(230)
+        self.lbl_frame.setWordWrap(True)
+        self.lbl_frame.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         info_row.addWidget(self.lbl_frame)
         root.addLayout(info_row)
 
@@ -153,19 +174,6 @@ class PreviewPanel(QWidget):
         self.combo_rot.currentIndexChanged.connect(self._on_rot_changed)
         ctrl3.addWidget(self.combo_rot)
         ctrl3.addStretch()
-        # 視点
-        self.btn_front = QPushButton("正面")
-        self.btn_front.clicked.connect(self._reset_front)
-        ctrl3.addWidget(self.btn_front)
-        self.btn_side = QPushButton("側面")
-        self.btn_side.clicked.connect(self._reset_side)
-        ctrl3.addWidget(self.btn_side)
-        self.btn_top = QPushButton("上面")
-        self.btn_top.clicked.connect(self._reset_top)
-        ctrl3.addWidget(self.btn_top)
-        self.btn_reset_view = QPushButton("リセット")
-        self.btn_reset_view.clicked.connect(self._reset_default)
-        ctrl3.addWidget(self.btn_reset_view)
         root.addLayout(ctrl3)
 
         # 信号
