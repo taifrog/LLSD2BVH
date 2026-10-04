@@ -52,7 +52,7 @@ llsd2bvh-gui
 | Area | Description |
 |------|------|
 | ① Input list | Shows the list of LLSD XML files. Add up to 100 files with drag and drop or `Add…`. Edit the list with `Remove`, `↑`, `↓`, `Clear`, and `Copy`. Use this list to manage files. The output order follows the timeline order. |
-| ② Timeline | Shows the horizontal time axis (0 to animation length). Each file gets one lane (header shows the file name) with its pose as a block. Red dashed split lines appear every 60 seconds with yellow overlap bands around the boundaries. Drag a block to move its time. Double-click a block to enter a numeric value. The first block is fixed at 0 seconds. The last block is fixed at `duration` (shown in a darker color). The timeline is enabled with 2 or more poses, and disabled with 1 pose. Use `−`/`+`, `100%`, and `Zoom: n%` at the top to zoom from 100% to 400% (in 50% steps). Use the wheel to zoom. Drag an empty area with the left button to pan. With 100 files, the view scrolls vertically. |
+| ② Timeline | Shows the horizontal time axis (0 to animation length). Each file gets one lane (header shows the file name) with its pose as a block. Red dashed split lines appear every 60 seconds with yellow overlap bands around the boundaries. Drag a block to move its time. Double-click a block to enter a numeric value. The first block is fixed at 0 seconds. The last block is fixed at `duration` (shown in a darker color). The timeline is enabled with 2 or more poses, and disabled with 1 pose. Use `−`/`+`, `100%`, and `Zoom: n%` at the top to zoom from 100% to 400% (in 50% steps). Use the wheel to zoom. Drag an empty area to pan vertically and horizontally. With 100 files, the view scrolls vertically. |
 | ③ Animation length | Sets the total length of the BVH in seconds. Specify a value from 0.1 to 600.0 seconds (up to 600 seconds of master length. Anything beyond 60 seconds is split automatically). The default is 5.0 seconds. With 2 poses, `Frame Time` equals `duration`. With 3 or more poses at uniform intervals, `Frame Time` equals the minimum interval. With uneven intervals, the tool calculates a uniform `Frame Time` from the minimum interval. It automatically inserts interpolated frames (rotation with `Slerp` and position with `lerp`). The tool clamps the minimum `Frame Time` to 0.01. |
 | ④ Calculated Frame Time / Total frames | Shows the `Frame Time` and total frame count calculated from the timeline (for example, `Computed Frame Time: 0.3125 Total: 18 (Tpose+17 P1@0s) (+9 interpolated)`). With uneven intervals, the display shows the interpolated frame count in parentheses. |
 | ⑤ Output destination | Sets the output folder. When empty, the tool auto-creates `<first_filename>_split/`. Use `Browse…` to select a folder. File names follow `<basename>_part01.bvh` (2-digit zero padding, auto-expanded to 3 digits beyond 10 parts). |
@@ -60,9 +60,22 @@ llsd2bvh-gui
 | ⑦ Units / SL compatible | Sets the output units and Second Life compatibility. `Auto` (recommended) outputs `inch` when a position exists and `meter` otherwise. The base frame (T-pose) is prepended to every output. `Frame Time` is currently hidden and calculated automatically. |
 | ⑧ Exclude hands | Toggles the bones to include. Hands are included by default (checkbox OFF). Turn the checkbox ON to exclude hands (the face and tail are always excluded. Only hands are toggleable). |
 | ⑨ Progress / Log | Shows the conversion progress and log output. |
-| ⑩ Preview / Viewer / Convert / Close | `Preview` shows the output BVH as a 3D stick figure (enabled after conversion). `Viewer` shows any BVH file in 3D (no conversion required, always enabled. Open it empty and select a file with `Browse…` in the viewer window or with drag and drop). Click `Convert` to run the conversion. When conversion finishes, a dialog shows the output path and frame count. |
+| ⑩ Viewer / Convert / Close | `Viewer` shows any BVH file in a separate 3D window (no conversion required, always enabled. Open it empty and select a file with `Browse…` in the viewer window or with drag and drop). Click `Convert` to run the conversion. When conversion finishes, a dialog shows the output folder and part count. The built-in preview on the right automatically shows part01. |
 | ⑪ Overlap / Loop / Split summary | Sets the overlap length at part boundaries from 0.0 to 5.0 seconds (default 2.0, in 0.1 steps). Turn `Loop` ON to auto-append the overlap portion of the first poses at the end (default OFF). The summary row shows the split layout (for example, `Split: 3 files (60.0s/60.0s/34.0s) overlap 2.0s`). |
-| ⑫ Part switching | Use the `Part:` dropdown to switch part01 to N and show each part in the existing viewer (enabled after conversion). |
+| ⑫ Part switching | Use the dropdown at the top of the preview (above the file row) to switch part01 to N (enabled after conversion). |
+
+#### Three-pane layout
+
+The main window uses a left 20 / middle 60 / right 20 three-pane layout. Ratios and the open/closed state persist across launches.
+
+| Area | Description |
+|------|------|
+| Header row | Title, language switch, and the preview fold button. |
+| Left pane | Input list and conversion parameters. |
+| Middle pane | Timeline and output-and-run. |
+| Right pane | Built-in preview (full-height dock). No separate window opens. The standalone viewer stays available via the `Viewer` button or `python -m llsd2bvh.viewer`. |
+
+The dark theme is fixed. There is no theme switch. |
 
 #### BVH Viewer
 
@@ -90,7 +103,7 @@ llsd2bvh-gui
 3. Adjust the timing of each pose on the timeline and check the animation length (the tool shows the calculated `Frame Time` and total frame count). Use `−` / `+` or the wheel to zoom in for fine editing. Set the overlap length and the loop option, and check the part layout in the summary row.
 4. Change the output folder or Units / SL compatibility as needed (normally keep `Auto`).
 5. Click `Convert`. When the log shows per-part `written` lines, the conversion succeeded. Load the output `.bvh` files in the viewer or Blender.
-6. After conversion, check the result with `Preview`. To check any BVH file without conversion, use `Viewer` to show a 3D stick figure (it plays smoothly at 30 fps with interpolation ON. Switch the viewpoint with `Front` / `Side` / `Top` / `Reset`).
+6. After conversion, check the result in the built-in preview on the right (switch parts with the dropdown). To check any BVH file without conversion, use `Viewer` to show a 3D stick figure (it plays smoothly at 30 fps with interpolation ON. Switch the viewpoint with `Front` / `Side` / `Top` / `Reset`).
 
 ## Usage: CLI (Command Line)
 
