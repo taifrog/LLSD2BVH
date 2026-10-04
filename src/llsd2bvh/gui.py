@@ -16,7 +16,7 @@ try:
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QListWidget, QListWidgetItem, QPushButton, QLabel, QLineEdit,
         QComboBox, QDoubleSpinBox, QCheckBox, QFileDialog, QMessageBox,
-        QProgressBar, QTextEdit, QScrollArea, QSplitter
+        QProgressBar, QTextEdit, QScrollArea, QSplitter, QSizePolicy
     )
     from PySide6.QtCore import Qt, QMimeData, QUrl, QSettings, QEvent
 except ImportError as e:
@@ -194,6 +194,9 @@ class MainWindow(QMainWindow):
         self.lbl_input = QLabel()
         self.left_layout.addWidget(self.lbl_input)
         self.list_widget = FileListWidget()
+        # 左幅のハード固定：最大幅250＋横スクロールなし。はみ出しは中間省略で吸収
+        self.list_widget.setMaximumWidth(250)
+        self.list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.left_layout.addWidget(self.list_widget, stretch=2)
 
         btn_row = QHBoxLayout()
@@ -260,6 +263,8 @@ class MainWindow(QMainWindow):
         dur_row.addSpacing(12)
         self.label_computed = QLabel()
         self.label_computed.setStyleSheet("color: #333; font-weight: bold;")
+        # ブロック位置依存の文言変化がペイン幅に波及しないよう幅計算から除外
+        self.label_computed.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         dur_row.addWidget(self.label_computed)
         dur_row.addStretch()
         self.left_layout.addLayout(dur_row)

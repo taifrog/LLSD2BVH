@@ -28,9 +28,11 @@ ZOOM_MIN = 1.0
 ZOOM_MAX = 4.0
 ZOOM_STEP = 0.5
 
-_BG = QColor(245, 245, 245)
-_LINE = QColor(180, 180, 180)
-_TICK = QColor(150, 150, 150)
+_BG = QColor(30, 30, 30)
+_LINE = QColor(154, 154, 154)
+_TICK = QColor(154, 154, 154)
+_TEXT = QColor(224, 224, 224)
+_LANE_TEXT = QColor(206, 145, 120)
 _BLOCK_FILL = QColor(100, 160, 240)
 _BLOCK_FIXED = QColor(70, 130, 210)
 _BLOCK_TEXT = QColor(255, 255, 255)
@@ -381,7 +383,7 @@ class TimelineView(QWidget):
             painter.drawLine(x, y_line - 6, x, y_line + 6)
             label = f"{t:.1f}s" if t != 0 else "0s"
             lw = fm.horizontalAdvance(label)
-            painter.setPen(QColor(60, 60, 60))
+            painter.setPen(_TEXT)
             # 左端基準なのでラベルはxを中央寄せ
             painter.drawText(x - lw // 2, PADDING_TOP + TIMELINE_H + 2, label)
             painter.setPen(QPen(_TICK, 1))
@@ -391,7 +393,7 @@ class TimelineView(QWidget):
             painter.drawLine(x, y_line - 6, x, y_line + 6)
             label = f"{self._duration:.1f}s"
             lw = fm.horizontalAdvance(label)
-            painter.setPen(QColor(60, 60, 60))
+            painter.setPen(_TEXT)
             painter.drawText(x - lw // 2, PADDING_TOP + TIMELINE_H + 2, label)
 
         items = self.get_items()
@@ -420,7 +422,7 @@ class TimelineView(QWidget):
             rect_x = x
             rect_y = lane_y + (LANE_H - BLOCK_H) // 2
             # レーン見出し＝LLSDファイル名（A/B/C表記なし、中間省略）
-            painter.setPen(QColor(40, 40, 40))
+            painter.setPen(_LANE_TEXT)
             hfont = QFont(self.font())
             hfont.setPointSize(8)
             painter.setFont(hfont)
