@@ -47,7 +47,7 @@ llsd2bvh-gui
 
 #### Main Window
 
-![GUI window](docs/screenshot-gui.png)
+![GUI window](docs/LLSDtoBVH-black01.png)
 
 | Area | Description |
 |------|------|
@@ -79,7 +79,7 @@ The dark theme is fixed. There is no theme switch. |
 
 #### BVH Viewer
 
-![BVH viewer](docs/screenshot-viewer.png)
+![BVH viewer](docs/LLSDtoBVH-black02.png)
 
 | Area | Description |
 |------|------|

@@ -43,7 +43,7 @@ llsd2bvh-gui
 
 #### メイン画面
 
-![GUI画面](docs/screenshot-gui.png)
+![GUI画面](docs/LLSDtoBVH-black01.png)
 
 | 部位 | 説明 |
 |------|------|
@@ -75,7 +75,7 @@ llsd2bvh-gui
 
 #### BVHビューア
 
-![BVHビューア](docs/screenshot-viewer.png)
+![BVHビューア](docs/LLSDtoBVH-black02.png)
 
 | 部位 | 説明 |
 |------|------|
